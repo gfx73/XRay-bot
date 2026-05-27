@@ -17,13 +17,16 @@ class Config(BaseModel):
     XUI_SERVER_NAME: str = os.getenv("XUI_SERVER_NAME", "domain.com")
     XUI_VERIFY_SSL: bool = Field(default=os.getenv("XUI_VERIFY_SSL", "True").lower() == "true")
     PAYMENT_TOKEN: str = os.getenv("PAYMENT_TOKEN", "")
+
+    # Старые поля оставляем для backwards-compat (используются при миграции данных)
     INBOUND_ID: int = Field(default=os.getenv("INBOUND_ID", 1))
     REALITY_PUBLIC_KEY: str = os.getenv("REALITY_PUBLIC_KEY", "")
     REALITY_FINGERPRINT: str = os.getenv("REALITY_FINGERPRINT", "chrome")
     REALITY_SNI: str = os.getenv("REALITY_SNI", "example.com")
     REALITY_SHORT_ID: str = os.getenv("REALITY_SHORT_ID", "1234567890")
     REALITY_SPIDER_X: str = os.getenv("REALITY_SPIDER_X", "/")
-    # Временные профили (30 минут)
+
+    # Временные профили (30 минут) - старые поля оставляем для backwards-compat
     TEMP_INBOUND_ID: int = Field(default=os.getenv("TEMP_INBOUND_ID", 2))
     TEMP_REALITY_PUBLIC_KEY: str = os.getenv("TEMP_REALITY_PUBLIC_KEY", "")
     TEMP_REALITY_FINGERPRINT: str = os.getenv("TEMP_REALITY_FINGERPRINT", "chrome")
@@ -33,6 +36,22 @@ class Config(BaseModel):
     TEMP_WEB_SERVER_PORT: int = Field(default=os.getenv("TEMP_WEB_SERVER_PORT", 8080))
     TEMP_SSL_CERT_PATH: str = os.getenv("TEMP_SSL_CERT_PATH", "")
     TEMP_SSL_KEY_PATH: str = os.getenv("TEMP_SSL_KEY_PATH", "")
+
+    # ────────────────────────────────────────────────
+    # Новая система тарифов
+    # Формат: "id:protocol,id:protocol" — например "1:reality,3:xhttp"
+    # Параметры каждого инбаунда задаются через INBOUND_{ID}_*
+    # ────────────────────────────────────────────────
+    BASIC_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
+    PREMIUM_INBOUNDS: str = os.getenv("PREMIUM_INBOUNDS", "")
+
+    # Коэффициент цены Premium = цена Basic * PREMIUM_PRICE_MULTIPLIER
+    PREMIUM_PRICE_MULTIPLIER: float = Field(
+        default=float(os.getenv("PREMIUM_PRICE_MULTIPLIER", "1.5"))
+    )
+
+    # Временные тест-инбаунды: "id:protocol,id:protocol"
+    TEMP_INBOUND_CONFIGS: str = os.getenv("TEMP_INBOUND_CONFIGS", "")
 
     # Настройки цен и скидок
     PRICES: Dict[int, Dict[str, int]] = {
@@ -48,36 +67,106 @@ class Config(BaseModel):
         if isinstance(value, str):
             return [int(admin) for admin in value.split(",") if admin.strip()]
         return value or []
-    
+
     @field_validator('INBOUND_ID', mode='before')
     def parse_inbound_id(cls, value):
         if isinstance(value, str):
             return int(value)
         return value or 15
-    
+
     @field_validator('TEMP_INBOUND_ID', mode='before')
     def parse_temp_inbound_id(cls, value):
         if isinstance(value, str):
             return int(value)
         return value or 2
-    
+
     @field_validator('TEMP_WEB_SERVER_PORT', mode='before')
     def parse_temp_web_server_port(cls, value):
         if isinstance(value, str):
             return int(value)
         return value or 8080
-    
-    def calculate_price(self, months: int) -> int:
-        """Вычисляет итоговую стоимость с учетом скидки"""
+
+    def _parse_inbound_configs_raw(self, raw: str) -> list[dict]:
+        """Парсит строку 'id:protocol,id:protocol' и подтягивает INBOUND_{ID}_* из env."""
+        result = []
+        if not raw:
+            return result
+        for part in raw.split(","):
+            part = part.strip()
+            if ":" not in part:
+                continue
+            inbound_id_str, protocol = part.split(":", 1)
+            inbound_id = int(inbound_id_str.strip())
+            protocol = protocol.strip()
+            params: dict = {"id": inbound_id, "protocol": protocol}
+            prefix = f"INBOUND_{inbound_id}_"
+            for key, val in os.environ.items():
+                if key.startswith(prefix):
+                    param_name = key[len(prefix):].lower()
+                    params[param_name] = val
+            result.append(params)
+        return result
+
+    def get_inbound_configs(self, tier: str) -> list[dict]:
+        """
+        Возвращает список конфигов инбаундов для заданного тарифа.
+
+        Если BASIC_INBOUNDS / PREMIUM_INBOUNDS не заданы — падбэк на старые поля
+        (INBOUND_ID + REALITY_* для basic, то же + ничего для premium, т.к. xhttp не настроен).
+
+        Пример возвращаемого элемента для Reality:
+          {"id": 1, "protocol": "reality", "public_key": "...", "sni": "...", ...}
+        Для xhttp:
+          {"id": 3, "protocol": "xhttp", "sni": "...", "path": "/", "security": "tls", ...}
+        """
+        raw = self.PREMIUM_INBOUNDS if tier == "premium" else self.BASIC_INBOUNDS
+        if raw:
+            return self._parse_inbound_configs_raw(raw)
+
+        # Backwards-compat: если новые переменные не заданы, используем старые
+        fallback = {
+            "id": self.INBOUND_ID,
+            "protocol": "reality",
+            "public_key": self.REALITY_PUBLIC_KEY,
+            "fingerprint": self.REALITY_FINGERPRINT,
+            "sni": self.REALITY_SNI,
+            "short_id": self.REALITY_SHORT_ID,
+            "spider_x": self.REALITY_SPIDER_X,
+        }
+        return [fallback]
+
+    def get_temp_inbound_configs(self) -> list[dict]:
+        """Возвращает список конфигов временных инбаундов."""
+        if self.TEMP_INBOUND_CONFIGS:
+            return self._parse_inbound_configs_raw(self.TEMP_INBOUND_CONFIGS)
+        # Backwards-compat
+        return [{
+            "id": self.TEMP_INBOUND_ID,
+            "protocol": "reality",
+            "public_key": self.TEMP_REALITY_PUBLIC_KEY,
+            "fingerprint": self.TEMP_REALITY_FINGERPRINT,
+            "sni": self.TEMP_REALITY_SNI,
+            "short_id": self.TEMP_REALITY_SHORT_ID,
+            "spider_x": self.TEMP_REALITY_SPIDER_X,
+        }]
+
+    def calculate_price(self, months: int, tier: str = "basic") -> int:
+        """Вычисляет итоговую стоимость с учётом скидки и тарифа."""
         if months not in self.PRICES:
             return 0
-        
         price_info = self.PRICES[months]
         base_price = price_info["base_price"]
         discount_percent = price_info["discount_percent"]
-        
         discount_amount = (base_price * discount_percent) // 100
-        return base_price - discount_amount
+        basic_price = base_price - discount_amount
+        if tier == "premium":
+            return int(basic_price * self.PREMIUM_PRICE_MULTIPLIER)
+        return basic_price
+
+    def has_premium_inbounds(self) -> bool:
+        """Возвращает True, если настроены отдельные инбаунды для premium."""
+        return bool(self.PREMIUM_INBOUNDS)
+
 
 config = Config(
     ADMINS=os.getenv("ADMINS", ""),

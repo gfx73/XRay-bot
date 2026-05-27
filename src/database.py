@@ -1,7 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,13 @@ class User(Base):
     username = Column(String)
     registration_date = Column(DateTime, default=datetime.utcnow)
     subscription_end = Column(DateTime)
-    vless_profile_id = Column(String)
-    vless_profile_data = Column(String)
+    vless_profile_id = Column(String)           # legacy
+    vless_profile_data = Column(String)          # legacy (одиночный профиль)
     is_admin = Column(Boolean, default=False)
     notified = Column(Boolean, default=False)
+    # ── Новые поля ──────────────────────────────────────────
+    subscription_tier = Column(String, default="basic")   # "basic" | "premium"
+    profiles_data = Column(Text, nullable=True)            # JSON: {inbound_id: profile_data}
 
 class StaticProfile(Base):
     __tablename__ = 'static_profiles'
@@ -34,11 +38,50 @@ async def init_db():
     Base.metadata.create_all(engine)
     logger.info("✅ Database tables created")
 
+async def migrate_database():
+    """
+    Идемпотентная миграция: добавляет новые столбцы и конвертирует
+    vless_profile_data → profiles_data для существующих пользователей.
+    Безопасно запускать при каждом старте бота.
+    """
+    from config import config
+
+    # 1. Добавляем новые столбцы (ошибка = столбец уже есть, игнорируем)
+    with engine.connect() as conn:
+        for stmt in [
+            "ALTER TABLE users ADD COLUMN subscription_tier TEXT NOT NULL DEFAULT 'basic'",
+            "ALTER TABLE users ADD COLUMN profiles_data TEXT",
+        ]:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+                logger.info(f"✅ Migration: executed: {stmt[:60]}...")
+            except Exception:
+                pass  # столбец уже существует
+
+    # 2. Конвертируем vless_profile_data → profiles_data для существующих пользователей
+    migrated = 0
+    with Session() as session:
+        users = session.query(User).filter(
+            User.vless_profile_data.isnot(None),
+            User.profiles_data.is_(None)
+        ).all()
+        for user in users:
+            try:
+                old = json.loads(user.vless_profile_data)
+                old["inbound_id"] = config.INBOUND_ID
+                user.profiles_data = json.dumps({str(config.INBOUND_ID): old})
+                migrated += 1
+            except Exception as e:
+                logger.error(f"🛑 Migration error for user {user.telegram_id}: {e}")
+        if migrated:
+            session.commit()
+            logger.info(f"✅ Migration: converted {migrated} legacy profiles to profiles_data")
+
 async def get_user(telegram_id: int):
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
-            # Проверяем и исправляем дату подписки если нужно
             original_end = user.subscription_end
             user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
             if user.subscription_end != original_end:
@@ -48,14 +91,14 @@ async def get_user(telegram_id: int):
 
 async def create_user(telegram_id: int, full_name: str, username: str = None, is_admin: bool = False):
     with Session() as session:
-        # Создаем пользователя с корректной датой подписки
         subscription_end = validate_and_fix_subscription_date(datetime.utcnow() + timedelta(days=3))
         user = User(
             telegram_id=telegram_id,
             full_name=full_name,
             username=username,
             subscription_end=subscription_end,
-            is_admin=is_admin
+            is_admin=is_admin,
+            subscription_tier="basic",
         )
         session.add(user)
         session.commit()
@@ -63,38 +106,37 @@ async def create_user(telegram_id: int, full_name: str, username: str = None, is
         return user
 
 async def delete_user_profile(telegram_id: int):
+    """Очищает данные профилей пользователя (legacy + новое поле)."""
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
             user.vless_profile_data = None
+            user.profiles_data = None
             user.notified = False
             session.commit()
             logger.info(f"✅ User profile deleted: {telegram_id}")
 
-async def update_subscription(telegram_id: int, months: int):
-    """Обновляет подписку с учетом текущего состояния"""
+async def update_subscription(telegram_id: int, months: int, tier: str = None):
+    """Обновляет подписку с учётом текущего состояния.
+
+    Args:
+        tier: если передан — обновляет subscription_tier пользователя.
+    """
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
             now = datetime.utcnow()
-            
-            # Сначала проверяем и исправляем текущую дату если нужно
             user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-            
-            # Если подписка активна, добавляем к текущей дате окончания
             if user.subscription_end > now:
                 user.subscription_end += timedelta(days=months * 30)
             else:
-                # Если подписка истекла, начинаем с текущей даты
                 user.subscription_end = now + timedelta(days=months * 30)
-            
-            # Проверяем и исправляем итоговую дату
             user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-            
-            # Сбрасываем флаг уведомления
             user.notified = False
+            if tier is not None:
+                user.subscription_tier = tier
             session.commit()
-            logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, new end: {user.subscription_end}")
+            logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, tier={tier}, new end: {user.subscription_end}")
             return True
         return False
 
@@ -128,57 +170,72 @@ async def get_user_stats():
         return total, with_sub, without_sub
 
 async def get_users_with_profiles():
-    """Получает всех пользователей с профилями"""
+    """Получает всех пользователей с профилями (legacy или новый формат)."""
     with Session() as session:
-        return session.query(User).filter(User.vless_profile_data.isnot(None)).all()
+        return session.query(User).filter(
+            (User.profiles_data.isnot(None)) | (User.vless_profile_data.isnot(None))
+        ).all()
 
 async def fix_all_subscription_dates():
-    """Исправляет все некорректные даты подписок в базе данных"""
+    """Исправляет все некорректные даты подписок в базе данных."""
     with Session() as session:
         users = session.query(User).all()
         fixed_count = 0
-        
         for user in users:
             original_end = user.subscription_end
             user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-            
             if user.subscription_end != original_end:
                 fixed_count += 1
                 logger.info(f"✅ Fixed subscription date for user {user.telegram_id}: {original_end} -> {user.subscription_end}")
-        
         session.commit()
         logger.info(f"📊 Fixed {fixed_count} subscription dates out of {len(users)} users")
         return fixed_count
 
 async def delete_user(telegram_id: int) -> bool:
-    """Удаляет пользователя из базы данных
-    
-    Args:
-        telegram_id: Telegram ID пользователя для удаления
-        
-    Returns:
-        True если пользователь был найден и удалён, False если пользователь не найден
-    """
+    """Удаляет пользователя из базы данных и его профили из 3x-ui."""
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
-            # Сначала удаляем профиль из 3x-ui если он есть
-            if user.vless_profile_data:
+            # Удаляем все профили из 3x-ui
+            profiles_to_delete: list[tuple[str, int]] = []  # (email, inbound_id)
+
+            # Новый формат profiles_data
+            if user.profiles_data:
+                try:
+                    from config import config as _config
+                    profiles = json.loads(user.profiles_data)
+                    for inbound_id_str, pdata in profiles.items():
+                        email = pdata.get("email")
+                        if email:
+                            profiles_to_delete.append((email, int(inbound_id_str)))
+                except Exception as e:
+                    logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
+
+            # Legacy: vless_profile_data (если profiles_data не заполнен)
+            elif user.vless_profile_data:
+                try:
+                    from config import config as _config
+                    pdata = json.loads(user.vless_profile_data)
+                    email = pdata.get("email")
+                    if email:
+                        profiles_to_delete.append((email, _config.INBOUND_ID))
+                except Exception as e:
+                    logger.error(f"🛑 Error parsing vless_profile_data for user {telegram_id}: {e}")
+
+            for email, inbound_id in profiles_to_delete:
                 try:
                     from functions import delete_client_by_email
-                    import json
-                    profile_data = json.loads(user.vless_profile_data)
-                    email = profile_data.get("email")
-                    if email:
-                        delete_result = await delete_client_by_email(email)
-                        if delete_result:
-                            logger.info(f"✅ Deleted profile from 3x-ui for user {telegram_id}")
-                        else:
-                            logger.warning(f"⚠️ Failed to delete profile from 3x-ui for user {telegram_id}")
+                    import asyncio
+                    result = asyncio.get_event_loop().run_until_complete(
+                        delete_client_by_email(email, inbound_id)
+                    )
+                    if result:
+                        logger.info(f"✅ Deleted profile from 3x-ui for user {telegram_id} (inbound {inbound_id})")
+                    else:
+                        logger.warning(f"⚠️ Failed to delete profile from 3x-ui for user {telegram_id} (inbound {inbound_id})")
                 except Exception as e:
                     logger.error(f"🛑 Error deleting profile from 3x-ui: {e}")
-            
-            # Удаляем пользователя из базы данных
+
             session.delete(user)
             session.commit()
             logger.info(f"✅ User {telegram_id} deleted from database")
@@ -188,33 +245,18 @@ async def delete_user(telegram_id: int) -> bool:
             return False
 
 def validate_and_fix_subscription_date(subscription_end: datetime) -> datetime:
-    """Проверяет и исправляет дату окончания подписки
-    
-    Args:
-        subscription_end: Текущая дата окончания подписки (datetime или str)
-        
-    Returns:
-        Исправленная дата окончания подписки (datetime)
-    """
+    """Проверяет и исправляет дату окончания подписки."""
     now = datetime.utcnow()
-    
-    # Конвертируем строку в datetime если нужно
     if isinstance(subscription_end, str):
         try:
             subscription_end = datetime.fromisoformat(subscription_end)
-            logger.debug(f"🔄 Конвертирована строка в datetime: {subscription_end}")
         except Exception as e:
             logger.error(f"🛑 Ошибка конвертации строки в datetime: {e}, value: {subscription_end}")
             return now + timedelta(days=3)
-    
-    # Проверяем, что subscription_end является datetime объектом
     if not isinstance(subscription_end, datetime):
         logger.error(f"🛑 subscription_end не является datetime: {type(subscription_end)}, value: {subscription_end}")
         return now + timedelta(days=3)
-    
-    # Если дата слишком старая (до 2020 года) или в будущем более чем на 10 лет
     if subscription_end < datetime(2020, 1, 1) or subscription_end > now + timedelta(days=3650):
         logger.warning(f"⚠️ Invalid subscription date detected: {subscription_end}, resetting to current time")
-        return now + timedelta(days=3)  # Даем 3 дня тестового периода
-    
+        return now + timedelta(days=3)
     return subscription_end
