@@ -3,6 +3,7 @@ import asyncio
 import logging
 import warnings
 import coloredlogs
+import uvicorn
 from config import config
 from aiogram import Bot, Dispatcher
 from aiogram.types import PreCheckoutQuery
@@ -162,14 +163,28 @@ async def main():
     async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
         await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-    try:
-        asyncio.create_task(check_subscriptions(bot))
-    except Exception as e:
-        logger.error(f"❌ Subscription check task failed to start: {e}")
+    tasks = [
+        dp.start_polling(bot),
+        check_subscriptions(bot),
+    ]
+
+    if config.TRIBUTE_API_KEY:
+        from tribute_webhook import create_tribute_app
+        tribute_app = create_tribute_app(bot)
+        server = uvicorn.Server(uvicorn.Config(
+            tribute_app,
+            host="0.0.0.0",
+            port=config.TRIBUTE_WEBHOOK_PORT,
+            log_level="warning",
+        ))
+        tasks.append(server.serve())
+        logger.info(f"ℹ️  Tribute webhook listening on port {config.TRIBUTE_WEBHOOK_PORT}")
+    else:
+        logger.info("ℹ️  TRIBUTE_API_KEY not set — Tribute webhook disabled")
 
     logger.info("ℹ️  Starting bot...")
     try:
-        await dp.start_polling(bot)
+        await asyncio.gather(*tasks)
     except Exception as e:
         logger.error(f"❌ Bot start error: {e}")
         return

@@ -18,7 +18,7 @@ from database import (
     fix_all_subscription_dates, get_users_with_profiles,
 )
 from functions import (
-    create_vless_profile, create_profile, inbound_id_from_profile,
+    create_profile, inbound_id_from_profile,
     delete_client_by_email, generate_vless_url,
     get_user_stats, create_static_client, get_global_stats,
     get_online_users, generate_sub_url, update_client_expiry,
@@ -259,26 +259,38 @@ async def renew_cmd(message: Message, bot: Bot):
 
 
 def _build_renew_keyboard():
-    """Строит клавиатуру выбора тарифа и периода."""
+    """Строит клавиатуру оплаты на основе настроенных методов.
+
+    Telegram Payments — если задан PAYMENT_TOKEN.
+    Tribute — если задан TRIBUTE_BASIC_URL / TRIBUTE_PREMIUM_URL.
+    Показываются только те методы, которые реально сконфигурированы.
+    """
     builder = InlineKeyboardBuilder()
     has_premium = config.has_premium_inbounds()
+    has_tg = bool(config.PAYMENT_TOKEN)
+    tribute_basic_url = config.TRIBUTE_BASIC_URL
+    tribute_premium_url = config.TRIBUTE_PREMIUM_URL
 
-    # Секция Basic
-    builder.button(text="─── 📦 Basic ───", callback_data="noop")
-    builder.adjust(1)
-    for months in sorted(config.PRICES.keys()):
-        price = config.calculate_price(months, "basic")
-        price_info = config.PRICES[months]
-        discount_text = f" (-{price_info['discount_percent']}%)" if price_info["discount_percent"] > 0 else ""
-        builder.button(text=f"{months} мес. — {price} руб.{discount_text}", callback_data=f"pay_basic_{months}")
+    def _add_tier(tier: str, tribute_url: str) -> None:
+        if not has_tg and not tribute_url:
+            return
+        label = "📦 Basic" if tier == "basic" else "⭐ Premium"
+        builder.button(text=f"─── {label} ───", callback_data="noop")
+        if has_tg:
+            for months in sorted(config.PRICES.keys()):
+                price = config.calculate_price(months, tier)
+                disc = config.PRICES[months]["discount_percent"]
+                disc_text = f" (-{disc}%)" if disc else ""
+                builder.button(
+                    text=f"{months} мес. — {price} руб.{disc_text}",
+                    callback_data=f"pay_{tier}_{months}",
+                )
+        if tribute_url:
+            builder.button(text="💳 Оплатить через Tribute →", url=tribute_url)
 
+    _add_tier("basic", tribute_basic_url)
     if has_premium:
-        builder.button(text="─── ⭐ Premium ───", callback_data="noop")
-        for months in sorted(config.PRICES.keys()):
-            price = config.calculate_price(months, "premium")
-            price_info = config.PRICES[months]
-            discount_text = f" (-{price_info['discount_percent']}%)" if price_info["discount_percent"] > 0 else ""
-            builder.button(text=f"{months} мес. — {price} руб.{discount_text}", callback_data=f"pay_premium_{months}")
+        _add_tier("premium", tribute_premium_url)
 
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     builder.adjust(1)

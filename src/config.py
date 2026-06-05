@@ -86,6 +86,23 @@ class Config(BaseModel):
             return int(value)
         return value or 8080
 
+    # ────────────────────────────────────────────────
+    # Tribute (опционально)
+    # ────────────────────────────────────────────────
+    TRIBUTE_API_KEY: str = os.getenv("TRIBUTE_API_KEY", "")
+    TRIBUTE_WEBHOOK_PORT: int = Field(default=os.getenv("TRIBUTE_WEBHOOK_PORT", 8081))
+    TRIBUTE_BASIC_PLAN_NAME: str = os.getenv("TRIBUTE_BASIC_PLAN_NAME", "Basic")
+    TRIBUTE_PREMIUM_PLAN_NAME: str = os.getenv("TRIBUTE_PREMIUM_PLAN_NAME", "Premium")
+    # Ссылки на страницы оплаты — копировать из Tribute Dashboard при публикации подписки
+    TRIBUTE_BASIC_URL: str = os.getenv("TRIBUTE_BASIC_URL", "")
+    TRIBUTE_PREMIUM_URL: str = os.getenv("TRIBUTE_PREMIUM_URL", "")
+
+    @field_validator('TRIBUTE_WEBHOOK_PORT', mode='before')
+    def parse_tribute_webhook_port(cls, value):
+        if isinstance(value, str):
+            return int(value)
+        return value or 8081
+
     def _parse_inbound_configs_raw(self, raw: str) -> list[dict]:
         """Парсит строку 'id:protocol,id:protocol' и подтягивает INBOUND_{ID}_* из env."""
         result = []

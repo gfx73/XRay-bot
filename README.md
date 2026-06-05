@@ -203,13 +203,13 @@ REALITY_SPIDER_X=/
 │   ├── database.py               # ORM-модели, migrate_database()
 │   ├── functions.py              # XUIAPI, create_profile(), генерация URL
 │   ├── handlers.py               # Обработчики команд и callback'ов
+│   ├── tribute_webhook.py        # FastAPI webhook-обработчик Tribute
 │   └── temp_profile_server.py    # FastAPI веб-сервер тест-профилей
 ├── templates/
 │   ├── temp_profile.html
 │   └── error.html
 ├── docs/
 │   └── README.en_US.md
-├── plan.md                       # План реализации xhttp + тарифов
 ├── README.md
 └── requirements.txt
 ```
@@ -254,12 +254,51 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 
 ## Работа с платежами
 
+### Telegram Payments (встроено)
+
 1. Пользователь выбирает тариф (Basic / Premium) и период
 2. Бот создаёт Telegram-инвойс с ценой `calculate_price(months, tier)`
 3. После успешной оплаты:
    - Обновляется `subscription_end` и `subscription_tier`
    - Создаются недостающие профили / обновляется expiry в существующих
    - При смене тарифа — лишние профили удаляются из 3x-ui
+
+### Tribute (опционально)
+
+[Tribute](https://tribute.tg) — платформа монетизации для Telegram. Преимущества перед Telegram Payments: иностранные карты, оплата криптовалютой (USDT/TON/BTC), автоматическое продление подписки.
+
+Оба способа оплаты работают **одновременно**.
+
+#### Настройка
+
+1. Зарегистрируйтесь на [tribute.tg](https://tribute.tg) и создайте планы подписки.  
+   Названия планов должны точно совпадать с `TRIBUTE_BASIC_PLAN_NAME` и `TRIBUTE_PREMIUM_PLAN_NAME`.
+
+2. Получите API-ключ: Tribute Dashboard → **⋮ → Settings → API Keys → Generate API Key**
+
+3. Пропишите переменные окружения:
+
+   | Переменная | Описание |
+   |---|---|
+   | `TRIBUTE_API_KEY` | API-ключ из Tribute Dashboard |
+   | `TRIBUTE_WEBHOOK_PORT` | Порт webhook-сервера (по умолчанию `8081`) |
+   | `TRIBUTE_BASIC_PLAN_NAME` | Точное название базового плана в Tribute (по умолчанию `Basic`) |
+   | `TRIBUTE_PREMIUM_PLAN_NAME` | Точное название премиум-плана в Tribute (по умолчанию `Premium`) |
+   | `TRIBUTE_BASIC_URL` | Ссылка на страницу оплаты Basic-плана (Tribute Dashboard → «Поделиться»). Если не задана — кнопка «Оплатить через Tribute» в `/renew` не появляется |
+   | `TRIBUTE_PREMIUM_URL` | Аналогично для Premium-плана |
+
+4. В разделе **API Keys** укажите URL вебхука:
+   ```
+   https://your-domain.com:8081/tribute/webhook
+   ```
+
+5. Убедитесь, что порт `8081` открыт в файрволе (или используйте nginx-прокси).
+
+#### Как работает
+
+- При `newSubscription` / `renewedSubscription` — подписка активируется/продлевается, профили в 3x-ui создаются или обновляются автоматически.
+- При `cancelledSubscription` — пользователь сохраняет доступ до конца оплаченного периода; профили удаляются стандартным hourly-чеком.
+- Если пользователь оплатил через Tribute до того как нажал `/start` — запись в БД создаётся автоматически.
 
 ## Мониторинг
 
@@ -275,6 +314,8 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 | Профиль не создаётся | Убедитесь, что инбаунд с указанным ID существует в панели |
 | xhttp-профиль отклоняется панелью | Проверьте, что `INBOUND_{ID}_SECURITY=tls` задан корректно |
 | Проблемы с платежами | Проверьте `PAYMENT_TOKEN` |
+| Tribute webhook не срабатывает | Проверьте `TRIBUTE_API_KEY` и доступность порта `TRIBUTE_WEBHOOK_PORT` извне |
+| Tribute: 401 Unauthorized | API-ключ в `.env` не совпадает с ключом в Tribute Dashboard |
 | Расхождения expiry | Используйте «Проверить подписки» в админ-меню |
 | Некорректные даты | Используйте «Исправить профили» в админ-меню |
 | Ошибки базы данных | Проверьте права на запись в директорию с `users.db` |

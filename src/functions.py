@@ -306,19 +306,6 @@ class XUIAPI:
             logger.exception(f"🛑 Create profile error: {e}")
             return None
 
-    async def create_vless_profile(self, telegram_id: int, expiry_time: int = 0):
-        """Legacy-совместимый метод. Использует основной Reality инбаунд."""
-        inbound_cfg = {
-            "id": config.INBOUND_ID,
-            "protocol": "reality",
-            "public_key": config.REALITY_PUBLIC_KEY,
-            "fingerprint": config.REALITY_FINGERPRINT,
-            "sni": config.REALITY_SNI,
-            "short_id": config.REALITY_SHORT_ID,
-            "spider_x": config.REALITY_SPIDER_X,
-        }
-        return await self.create_profile(telegram_id, expiry_time, inbound_cfg)
-
     async def create_static_client(self, profile_name: str):
         """Создание статического клиента (legacy, только Reality)."""
         if not await self.login():
@@ -629,15 +616,6 @@ async def create_profile(telegram_id: int, expiry_time: int, inbound_cfg: dict) 
     api = XUIAPI()
     try:
         return await api.create_profile(telegram_id, expiry_time, inbound_cfg)
-    finally:
-        await api.close()
-
-
-async def create_vless_profile(telegram_id: int, expiry_time: int = 0):
-    """Legacy-совместимая обёртка. Создаёт Reality профиль в основном инбаунде."""
-    api = XUIAPI()
-    try:
-        return await api.create_vless_profile(telegram_id, expiry_time)
     finally:
         await api.close()
 
