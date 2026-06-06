@@ -25,6 +25,8 @@ from functions import (
     get_safe_expiry_timestamp, force_update_profile_expiry,
     check_and_fix_subscriptions, safe_json_loads,
 )
+from urllib.parse import unquote
+
 
 logger = logging.getLogger(__name__)
 
@@ -602,7 +604,6 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     """Отправляет сообщение с QR-кодом и ссылками подключения.
     profiles — {'standard': {...}, 'wl': {...}}
     """
-    all_vless_lines = []
     builder = InlineKeyboardBuilder()
 
     for slot in ("standard", "wl"):
@@ -615,13 +616,7 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
         sub_url = generate_sub_url(sub_id)
         full_sub_url = sub_url if sub_url.startswith(("http://", "https://")) else "https://" + sub_url
 
-        vless_urls = await fetch_sub_configs(sub_url)
-        if vless_urls:
-            slot_label = "🔒 Reality" if slot == "standard" else "⚡ Whitelist"
-            for url in vless_urls:
-                all_vless_lines.append(f"{slot_label}:\n`{url}`")
-
-        btn_text = "🔒 Подключиться (Reality)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
+        btn_text = "🔒 Подключиться (Standart)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
         builder.button(text=btn_text, url=full_sub_url)
 
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
@@ -646,11 +641,6 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     if std_sub_id:
         std_sub_url = generate_sub_url(std_sub_id)
         qr_data = std_sub_url if std_sub_url.startswith(("http://", "https://")) else "https://" + std_sub_url
-    elif all_vless_lines:
-        try:
-            qr_data = all_vless_lines[0].split("`")[1]
-        except IndexError:
-            qr_data = "https://example.com"
     else:
         qr_data = "https://example.com"
 
@@ -664,8 +654,6 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     photo = BufferedInputFile(img_byte_arr.getvalue(), filename="qr.png")
 
     caption = instructions
-    if all_vless_lines:
-        caption += "\n" + "\n\n".join(all_vless_lines)
 
     if delete_after:
         try:
