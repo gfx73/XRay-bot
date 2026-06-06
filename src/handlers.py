@@ -70,30 +70,43 @@ def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
 # Вспомогательные функции
 # ────────────────────────────────────────────────────────────
 
-def _get_profile(user) -> dict | None:
-    """Возвращает profiles_data пользователя или None."""
+def _get_profiles(user) -> dict:
+    """Возвращает {'standard': ..., 'wl': ...} или {}."""
     p = safe_json_loads(user.profiles_data, default=None)
-    return p if (p and "email" in p) else None
-
-
-def _get_sub_id(user) -> str | None:
-    p = _get_profile(user)
-    return p.get("sub_id") if p else None
+    if not p or not isinstance(p, dict) or "standard" not in p:
+        return {}
+    return p
 
 
 def _has_profiles(user) -> bool:
-    return _get_profile(user) is not None
+    return bool(_get_profiles(user))
 
 
 async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str) -> dict:
-    """Создаёт единого VPN-клиента для всех инбаундов тарифа."""
+    """Создаёт VPN-клиентов для тарифа: standard для всех, wl — только для premium."""
     expiry_time = get_safe_expiry_timestamp(subscription_end)
-    inbound_cfgs = config.get_inbound_configs(tier)
-    profile = await create_client(telegram_id, expiry_time, inbound_cfgs)
-    if not profile:
-        logger.error(f"🛑 Failed to create client for user {telegram_id}")
-        return {}
-    return profile
+    profiles = {}
+
+    basic_cfgs = config.get_inbound_configs("basic")
+    standard_profile = await create_client(telegram_id, expiry_time, basic_cfgs)
+    if standard_profile:
+        profiles["standard"] = standard_profile
+    else:
+        logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
+
+    if tier == "premium" and config.has_premium_inbounds():
+        premium_cfgs = config.get_inbound_configs("premium")
+        wl_profile = await create_client(
+            telegram_id, expiry_time, premium_cfgs,
+            email_suffix="_wl",
+            traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+        )
+        if wl_profile:
+            profiles["wl"] = wl_profile
+        else:
+            logger.error(f"🛑 Failed to create wl client for user {telegram_id}")
+
+    return profiles
 
 
 async def show_menu(bot: Bot, chat_id: int, message_id: int = None):
@@ -262,55 +275,56 @@ async def connect_cmd(message: Message, bot: Bot):
 
     if not _has_profiles(user):
         await message.answer("⚙️ Создаём ваш VPN профиль...")
-        new_profile = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
-        if new_profile:
+        new_profiles = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
+        if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
-                    db_user.profiles_data = json.dumps(new_profile)
+                    db_user.profiles_data = json.dumps(new_profiles)
                     session.commit()
             user = await get_user(user.telegram_id)
         else:
             await message.answer("🛑 Ошибка при создании профиля. Попробуйте позже.")
             return
 
-    profile = _get_profile(user)
-    if not profile:
+    profiles = _get_profiles(user)
+    if not profiles:
         await message.answer("⚠️ У вас пока нет созданного профиля.")
         return
 
-    await _send_profile_message(message, user, profile, profile.get("sub_id"), edit=False)
+    await _send_profile_message(message, user, profiles, edit=False)
+
+
+def _format_bytes(value: int) -> str:
+    mb = value / 1024 / 1024
+    if mb < 1024:
+        return f"{mb:.2f} MB"
+    return f"{mb / 1024:.2f} GB"
 
 
 @router.message(Command("stats"))
 async def stats_cmd(message: Message, bot: Bot):
     user = await get_user(message.from_user.id)
-    profile = _get_profile(user) if user else None
-    if not profile:
+    profiles = _get_profiles(user) if user else {}
+    if not profiles:
         await message.answer("⚠️ Профиль не создан")
         return
 
     await message.answer("⚙️ Загружаем вашу статистику...")
-    stats = await get_user_stats(profile["email"])
 
-    upload = f"{stats.get('upload', 0) / 1024 / 1024:.2f}"
-    upload_size = 'MB' if int(float(upload)) < 1024 else 'GB'
-    if upload_size == "GB":
-        upload = f"{int(float(upload) / 1024):.2f}"
+    lines = ["📊 **Ваша статистика:**\n"]
+    for slot, profile in profiles.items():
+        stats = await get_user_stats(profile["email"])
+        label = "🔒 Standart" if slot == "standard" else "⚡ Whitelist"
+        lines.append(
+            f"{label}:\n"
+            f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
+            f"  🔽 {_format_bytes(stats.get('download', 0))}"
+        )
 
-    download = f"{stats.get('download', 0) / 1024 / 1024:.2f}"
-    download_size = 'MB' if int(float(download)) < 1024 else 'GB'
-    if download_size == "GB":
-        download = f"{int(float(download) / 1024):.2f}"
-
-    text = (
-        "📊 **Ваша статистика:**\n\n"
-        f"🔼 Загружено: `{upload} {upload_size}`\n"
-        f"🔽 Скачано: `{download} {download_size}`\n"
-    )
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
-    await message.answer(text, parse_mode='Markdown', reply_markup=builder.as_markup())
+    await message.answer("\n".join(lines), parse_mode='Markdown', reply_markup=builder.as_markup())
 
 
 @router.message(Command("help"))
@@ -428,27 +442,43 @@ async def process_successful_payment(message: Message, bot: Bot):
 
         if success:
             updated_user = await get_user(message.from_user.id)
-            inbound_cfgs = config.get_inbound_configs(tier)
-            new_inbound_id_set = {cfg["id"] for cfg in inbound_cfgs}
             expiry_time = get_safe_expiry_timestamp(updated_user.subscription_end)
-            existing = _get_profile(updated_user)
+            existing = _get_profiles(updated_user)
 
-            if existing:
-                current_inbound_ids = set(existing.get("inbound_ids", []))
-                if current_inbound_ids == new_inbound_id_set:
-                    await update_client_expiry(existing["email"], expiry_time)
-                    profile_to_save = existing
-                else:
-                    await delete_client_by_email(existing["email"])
-                    profile_to_save = await create_client(message.from_user.id, expiry_time, inbound_cfgs)
+            profiles_to_save = {}
+
+            # Standard-клиент — всегда обновляем expiry или создаём
+            if "standard" in existing:
+                await update_client_expiry(existing["standard"]["email"], expiry_time)
+                profiles_to_save["standard"] = existing["standard"]
             else:
-                profile_to_save = await create_client(message.from_user.id, expiry_time, inbound_cfgs)
+                basic_cfgs = config.get_inbound_configs("basic")
+                new_std = await create_client(message.from_user.id, expiry_time, basic_cfgs)
+                if new_std:
+                    profiles_to_save["standard"] = new_std
+
+            # WL-клиент — только для premium
+            if tier == "premium" and config.has_premium_inbounds():
+                if "wl" in existing:
+                    await update_client_expiry(existing["wl"]["email"], expiry_time)
+                    profiles_to_save["wl"] = existing["wl"]
+                else:
+                    premium_cfgs = config.get_inbound_configs("premium")
+                    new_wl = await create_client(
+                        message.from_user.id, expiry_time, premium_cfgs,
+                        email_suffix="_wl",
+                        traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+                    )
+                    if new_wl:
+                        profiles_to_save["wl"] = new_wl
+            elif "wl" in existing:
+                # Даунгрейд с premium — удаляем wl-клиента
+                await delete_client_by_email(existing["wl"]["email"])
 
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
                 if db_user:
-                    if profile_to_save:
-                        db_user.profiles_data = json.dumps(profile_to_save)
+                    db_user.profiles_data = json.dumps(profiles_to_save)
                     db_user.subscription_tier = tier
                     session.commit()
 
@@ -490,52 +520,74 @@ async def connect_profile(callback: CallbackQuery):
 
     if not _has_profiles(user):
         await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
-        new_profile = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
-        if new_profile:
+        new_profiles = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
+        if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
-                    db_user.profiles_data = json.dumps(new_profile)
+                    db_user.profiles_data = json.dumps(new_profiles)
                     session.commit()
             user = await get_user(user.telegram_id)
         else:
             await callback.message.answer("🛑 Ошибка при создании профиля. Попробуйте позже.")
             return
 
-    profile = _get_profile(user)
-    if not profile:
+    profiles = _get_profiles(user)
+    if not profiles:
         await callback.message.answer("⚠️ У вас пока нет созданного профиля.")
         return
 
     # Синхронизируем expiry в 3x-ui при каждом просмотре профиля
     expiry_time = get_safe_expiry_timestamp(user.subscription_end)
     if expiry_time > 0:
-        await update_client_expiry(profile["email"], expiry_time)
+        for slot_profile in profiles.values():
+            await update_client_expiry(slot_profile["email"], expiry_time)
 
-    await _send_profile_message(callback.message, user, profile, profile.get("sub_id"), edit=True, delete_after=True)
+    await _send_profile_message(callback.message, user, profiles, edit=True, delete_after=True)
 
 
-async def _send_profile_message(msg_or_callback, user, profile: dict, sub_id: str, edit: bool = False, delete_after: bool = False):
+async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: bool = False, delete_after: bool = False):
     """Отправляет сообщение с QR-кодом и ссылками подключения.
-    profile — новый формат: {"email", "uuid", "sub_id", "inbound_ids", "inbounds"}.
+    profiles — {'standard': {...}, 'wl': {...}}
     """
-    sub_url = generate_sub_url(sub_id) if sub_id else ""
-    tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
-    inbound_cfgs_map = {str(cfg["id"]): cfg for cfg in config.get_inbound_configs(tier)}
+    slot_cfg_maps = {
+        "standard": {str(cfg["id"]): cfg for cfg in config.get_inbound_configs("basic")},
+        "wl": {str(cfg["id"]): cfg for cfg in config.get_inbound_configs("premium")},
+    }
 
-    profile_lines = []
-    for iid in profile.get("inbound_ids", []):
-        iid_str = str(iid)
-        inbound_cfg = inbound_cfgs_map.get(iid_str)
-        meta = profile.get("inbounds", {}).get(iid_str, {})
-        port = meta.get("port")
-        remark = meta.get("remark", "")
-        client_uuid = profile.get("uuid", "")
-        if not (inbound_cfg and port and client_uuid):
+    all_vless_lines = []
+    builder = InlineKeyboardBuilder()
+
+    for slot in ("standard", "wl"):
+        profile = profiles.get(slot)
+        if not profile:
             continue
-        vless_url = generate_vless_url_v2(inbound_cfg, client_uuid, port, remark)
-        label = "🔒 Reality" if inbound_cfg.get("protocol") == "reality" else "⚡ xhttp"
-        profile_lines.append(f"{label}:\n`{vless_url}`")
+        sub_id = profile.get("sub_id")
+        sub_url = generate_sub_url(sub_id) if sub_id else ""
+        inbound_cfgs_map = slot_cfg_maps.get(slot, {})
+
+        slot_lines = []
+        for iid in profile.get("inbound_ids", []):
+            iid_str = str(iid)
+            inbound_cfg = inbound_cfgs_map.get(iid_str)
+            meta = profile.get("inbounds", {}).get(iid_str, {})
+            port = meta.get("port")
+            remark = meta.get("remark", "")
+            client_uuid = profile.get("uuid", "")
+            if not (inbound_cfg and port and client_uuid):
+                continue
+            vless_url = generate_vless_url_v2(inbound_cfg, client_uuid, port, remark)
+            label = "🔒 Reality" if inbound_cfg.get("protocol") == "reality" else "⚡ xhttp"
+            slot_lines.append(f"{label}:\n`{vless_url}`")
+
+        all_vless_lines.extend(slot_lines)
+
+        if sub_url:
+            btn_text = "🔒 Подключиться (Reality)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
+            builder.button(text=btn_text, url="https://" + sub_url)
+
+    builder.button(text="⬅️ В меню", callback_data="back_to_menu")
+    builder.adjust(1)
 
     instructions = (
         "📲 Как подключить VPN\n"
@@ -550,11 +602,14 @@ async def _send_profile_message(msg_or_callback, user, profile: dict, sub_id: st
         "💡 Если не получилось — попробуйте другое приложение\n"
     )
 
-    if sub_url:
-        qr_data = "https://" + sub_url
-    elif profile_lines:
+    # QR-код от standard-профиля
+    standard = profiles.get("standard", {})
+    std_sub_id = standard.get("sub_id") if standard else None
+    if std_sub_id:
+        qr_data = "https://" + generate_sub_url(std_sub_id)
+    elif all_vless_lines:
         try:
-            qr_data = profile_lines[0].split("`")[1]
+            qr_data = all_vless_lines[0].split("`")[1]
         except IndexError:
             qr_data = "https://example.com"
     else:
@@ -569,15 +624,9 @@ async def _send_profile_message(msg_or_callback, user, profile: dict, sub_id: st
     img_byte_arr.seek(0)
     photo = BufferedInputFile(img_byte_arr.getvalue(), filename="qr.png")
 
-    builder = InlineKeyboardBuilder()
-    if sub_url:
-        builder.button(text='Подключиться', url='https://' + sub_url)
-    builder.button(text="⬅️ В меню", callback_data="back_to_menu")
-    builder.adjust(1)
-
     caption = instructions
-    if profile_lines:
-        caption += "\n" + "\n\n".join(profile_lines)
+    if all_vless_lines:
+        caption += "\n" + "\n\n".join(all_vless_lines)
 
     if delete_after:
         try:
@@ -586,7 +635,7 @@ async def _send_profile_message(msg_or_callback, user, profile: dict, sub_id: st
             pass
     await msg_or_callback.answer_photo(
         photo=photo,
-        caption=caption[:1024],  # Telegram лимит caption
+        caption=caption[:1024],
         reply_markup=builder.as_markup(),
         parse_mode='Markdown'
     )
@@ -595,33 +644,27 @@ async def _send_profile_message(msg_or_callback, user, profile: dict, sub_id: st
 @router.callback_query(F.data == "stats")
 async def user_stats(callback: CallbackQuery):
     user = await get_user(callback.from_user.id)
-    profile = _get_profile(user) if user else None
-    if not profile:
+    profiles = _get_profiles(user) if user else {}
+    if not profiles:
         await callback.answer("⚠️ Профиль не создан")
         return
 
     await callback.message.edit_text("⚙️ Загружаем вашу статистику...")
-    stats = await get_user_stats(profile["email"])
 
-    upload = f"{stats.get('upload', 0) / 1024 / 1024:.2f}"
-    upload_size = 'MB' if int(float(upload)) < 1024 else 'GB'
-    if upload_size == "GB":
-        upload = f"{int(float(upload) / 1024):.2f}"
-
-    download = f"{stats.get('download', 0) / 1024 / 1024:.2f}"
-    download_size = 'MB' if int(float(download)) < 1024 else 'GB'
-    if download_size == "GB":
-        download = f"{int(float(download) / 1024):.2f}"
+    lines = ["📊 **Ваша статистика:**\n"]
+    for slot, profile in profiles.items():
+        stats = await get_user_stats(profile["email"])
+        label = "🔒 Reality" if slot == "standard" else "⚡ Whitelist"
+        lines.append(
+            f"{label}:\n"
+            f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
+            f"  🔽 {_format_bytes(stats.get('download', 0))}"
+        )
 
     await callback.message.delete()
-    text = (
-        "📊 **Ваша статистика:**\n\n"
-        f"🔼 Загружено: `{upload} {upload_size}`\n"
-        f"🔽 Скачано: `{download} {download_size}`\n"
-    )
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
-    await callback.message.answer(text, parse_mode='Markdown', reply_markup=builder.as_markup())
+    await callback.message.answer("\n".join(lines), parse_mode='Markdown', reply_markup=builder.as_markup())
 
 
 # ────────────────────────────────────────────────────────────
@@ -706,15 +749,17 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
                     user.subscription_end = datetime.utcnow() + timedelta(seconds=total_seconds)
                 session.commit()
 
-                profile = safe_json_loads(user.profiles_data, {})
-                email = profile.get("email")
-                if email:
-                    try:
-                        expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                        await update_client_expiry(email, expiry_time)
-                        logger.info(f"✅ Updated expiry for user {user_id} (admin add time)")
-                    except Exception as e:
-                        logger.error(f"🛑 Failed to update expiry for user {user_id}: {e}")
+                profiles = safe_json_loads(user.profiles_data, {})
+                if isinstance(profiles, dict) and "standard" in profiles:
+                    expiry_time = get_safe_expiry_timestamp(user.subscription_end)
+                    for slot_profile in profiles.values():
+                        email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
+                        if email:
+                            try:
+                                await update_client_expiry(email, expiry_time)
+                                logger.info(f"✅ Updated expiry for {email} (admin add time)")
+                            except Exception as e:
+                                logger.error(f"🛑 Failed to update expiry for {email}: {e}")
 
                 await message.answer(f"✅ Добавлено время пользователю {user_id}")
             else:
@@ -771,15 +816,17 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
                 user.subscription_end = new_end
                 session.commit()
 
-                profile = safe_json_loads(user.profiles_data, {})
-                email = profile.get("email")
-                if email:
-                    try:
-                        expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                        await update_client_expiry(email, expiry_time)
-                        logger.info(f"✅ Updated expiry for user {user_id} (admin remove time)")
-                    except Exception as e:
-                        logger.error(f"🛑 Failed to update expiry for user {user_id}: {e}")
+                profiles = safe_json_loads(user.profiles_data, {})
+                if isinstance(profiles, dict) and "standard" in profiles:
+                    expiry_time = get_safe_expiry_timestamp(user.subscription_end)
+                    for slot_profile in profiles.values():
+                        email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
+                        if email:
+                            try:
+                                await update_client_expiry(email, expiry_time)
+                                logger.info(f"✅ Updated expiry for {email} (admin remove time)")
+                            except Exception as e:
+                                logger.error(f"🛑 Failed to update expiry for {email}: {e}")
 
                 await message.answer(f"✅ Удалено время у пользователя {user_id}")
             else:
@@ -1022,18 +1069,21 @@ async def admin_fix_profiles(callback: CallbackQuery):
 
         success_count = fail_count = 0
         for user in users:
-            profile = safe_json_loads(user.profiles_data, {})
-            email = profile.get("email")
-            if email:
-                try:
-                    result = await force_update_profile_expiry(email, user.subscription_end)
-                    if result:
-                        success_count += 1
-                    else:
+            profiles = safe_json_loads(user.profiles_data, {})
+            if not isinstance(profiles, dict) or "standard" not in profiles:
+                continue
+            for slot_profile in profiles.values():
+                email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
+                if email:
+                    try:
+                        result = await force_update_profile_expiry(email, user.subscription_end)
+                        if result:
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    except Exception as e:
+                        logger.error(f"🛑 Error fixing profile {email}: {e}")
                         fail_count += 1
-                except Exception as e:
-                    logger.error(f"🛑 Error fixing profile {email}: {e}")
-                    fail_count += 1
 
         text = (
             f"🔧 **Исправление профилей завершено:**\n\n"

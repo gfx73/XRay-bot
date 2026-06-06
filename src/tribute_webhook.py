@@ -27,33 +27,50 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 
 
 async def _sync_profiles(telegram_id: int, tier: str, bot: Bot) -> None:
-    """Создаёт/обновляет VPN-клиента в 3x-ui после активации Tribute-подписки."""
+    """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки."""
     updated_user = await get_user(telegram_id)
     if not updated_user:
         return
 
-    inbound_cfgs = config.get_inbound_configs(tier)
-    new_inbound_id_set = {cfg["id"] for cfg in inbound_cfgs}
     expiry_time = get_safe_expiry_timestamp(updated_user.subscription_end)
-    existing = safe_json_loads(updated_user.profiles_data, default=None)
-    existing = existing if (existing and "email" in existing) else None
+    existing = safe_json_loads(updated_user.profiles_data, default={})
+    if not isinstance(existing, dict) or "standard" not in existing:
+        existing = {}
 
-    if existing:
-        current_inbound_ids = set(existing.get("inbound_ids", []))
-        if current_inbound_ids == new_inbound_id_set:
-            await update_client_expiry(existing["email"], expiry_time)
-            profile_to_save = existing
-        else:
-            await delete_client_by_email(existing["email"])
-            profile_to_save = await create_client(telegram_id, expiry_time, inbound_cfgs)
+    profiles_to_save = {}
+
+    # Standard-клиент (Reality, безлимит) — всегда присутствует
+    if "standard" in existing:
+        await update_client_expiry(existing["standard"]["email"], expiry_time)
+        profiles_to_save["standard"] = existing["standard"]
     else:
-        profile_to_save = await create_client(telegram_id, expiry_time, inbound_cfgs)
+        basic_cfgs = config.get_inbound_configs("basic")
+        new_std = await create_client(telegram_id, expiry_time, basic_cfgs)
+        if new_std:
+            profiles_to_save["standard"] = new_std
+
+    # WL-клиент (xhttp/CDN, с лимитом) — только для premium
+    if tier == "premium" and config.has_premium_inbounds():
+        if "wl" in existing:
+            await update_client_expiry(existing["wl"]["email"], expiry_time)
+            profiles_to_save["wl"] = existing["wl"]
+        else:
+            premium_cfgs = config.get_inbound_configs("premium")
+            new_wl = await create_client(
+                telegram_id, expiry_time, premium_cfgs,
+                email_suffix="_wl",
+                traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+            )
+            if new_wl:
+                profiles_to_save["wl"] = new_wl
+    elif "wl" in existing:
+        # Даунгрейд с premium — удаляем wl-клиента
+        await delete_client_by_email(existing["wl"]["email"])
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if db_user:
-            if profile_to_save:
-                db_user.profiles_data = json.dumps(profile_to_save)
+            db_user.profiles_data = json.dumps(profiles_to_save)
             db_user.subscription_tier = tier
             session.commit()
 

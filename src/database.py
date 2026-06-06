@@ -164,10 +164,13 @@ async def delete_user(telegram_id: int) -> bool:
         emails_to_delete: set = set()
         if user.profiles_data:
             try:
-                profile = json.loads(user.profiles_data)
-                email = profile.get("email")
-                if email:
-                    emails_to_delete.add(email)
+                profiles = json.loads(user.profiles_data)
+                if isinstance(profiles, dict) and "standard" in profiles:
+                    for slot_profile in profiles.values():
+                        if isinstance(slot_profile, dict):
+                            email = slot_profile.get("email")
+                            if email:
+                                emails_to_delete.add(email)
             except Exception as e:
                 logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
 

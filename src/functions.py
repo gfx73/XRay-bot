@@ -73,8 +73,19 @@ class XUIAPI:
     # Создание клиентов (v3.2.8 unified API)
     # ────────────────────────────────────────────────────────
 
-    async def create_client(self, telegram_id: int, expiry_time: int, inbound_cfgs: list[dict]) -> Optional[dict]:
-        """Создаёт единого клиента во всех инбаундах тарифа одним запросом.
+    async def create_client(
+        self,
+        telegram_id: int,
+        expiry_time: int,
+        inbound_cfgs: list[dict],
+        email_suffix: str = "",
+        traffic_limit_gb: int = 0,
+    ) -> Optional[dict]:
+        """Создаёт клиента во всех указанных инбаундах одним запросом.
+
+        Args:
+            email_suffix: суффикс к email (например "_wl" для whitelist-клиента)
+            traffic_limit_gb: лимит трафика в ГБ, 0 = безлимит
 
         Returns:
             {"email", "uuid", "sub_id", "inbound_ids", "inbounds": {id_str: {port, remark}}}
@@ -84,8 +95,8 @@ class XUIAPI:
             return None
 
         client_id = str(uuid.uuid4())
-        email = f"user_{telegram_id}"
-        sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"user_{telegram_id}"))
+        email = f"user_{telegram_id}{email_suffix}"
+        sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, email))
         inbound_ids = [cfg["id"] for cfg in inbound_cfgs]
 
         expiry_ms = expiry_time * 1000
@@ -121,7 +132,7 @@ class XUIAPI:
                 "expiryTime": expiry_ms,
                 "enable": True,
                 "limitIp": 0,
-                "totalGB": 0,
+                "totalGB": traffic_limit_gb * 1024 ** 3,
                 "tgId": 0,
                 "reset": 0,
             },
@@ -411,11 +422,17 @@ class XUIAPI:
 # Модульные обёртки
 # ──────────────────────────────────────────────────────────────
 
-async def create_client(telegram_id: int, expiry_time: int, inbound_cfgs: list[dict]) -> Optional[dict]:
-    """Создаёт единого клиента во всех инбаундах тарифа."""
+async def create_client(
+    telegram_id: int,
+    expiry_time: int,
+    inbound_cfgs: list[dict],
+    email_suffix: str = "",
+    traffic_limit_gb: int = 0,
+) -> Optional[dict]:
+    """Создаёт клиента во всех указанных инбаундах."""
     api = XUIAPI()
     try:
-        return await api.create_client(telegram_id, expiry_time, inbound_cfgs)
+        return await api.create_client(telegram_id, expiry_time, inbound_cfgs, email_suffix, traffic_limit_gb)
     finally:
         await api.close()
 
@@ -645,17 +662,22 @@ async def check_and_fix_subscriptions() -> dict:
         from database import get_users_with_profiles
         users_db = await get_users_with_profiles()
 
-        # Маппинг email → (user, первый inbound_id)
+        # Маппинг email → (user, первый inbound_id) для всех клиентов (standard + wl)
         users_map: dict[str, tuple] = {}
         for user in users_db:
             if not user.profiles_data:
                 continue
             try:
-                profile = json.loads(user.profiles_data)
-                email = profile.get("email")
-                if email:
-                    first_iid = profile.get("inbound_ids", [None])[0]
-                    users_map[email] = (user, first_iid)
+                profiles = json.loads(user.profiles_data)
+                if not isinstance(profiles, dict) or "standard" not in profiles:
+                    continue
+                for slot_profile in profiles.values():
+                    if not isinstance(slot_profile, dict):
+                        continue
+                    email = slot_profile.get("email")
+                    if email:
+                        first_iid = slot_profile.get("inbound_ids", [None])[0]
+                        users_map[email] = (user, first_iid)
             except Exception as e:
                 logger.error(f"🛑 Error parsing profiles_data for user {user.telegram_id}: {e}")
 

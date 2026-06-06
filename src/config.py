@@ -27,6 +27,9 @@ class Config(BaseModel):
     BASIC_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
     PREMIUM_INBOUNDS: str = os.getenv("PREMIUM_INBOUNDS", "")
 
+    # Лимит трафика для wl-клиента premium (в ГБ), 0 = безлимит
+    PREMIUM_TRAFFIC_LIMIT_GB: int = Field(default=int(os.getenv("PREMIUM_TRAFFIC_LIMIT_GB", "0")))
+
     TRIAL_DAYS: int = Field(default=int(os.getenv("TRIAL_DAYS", "3")))
     TRIAL_TIER: str = os.getenv("TRIAL_TIER", "basic")
 

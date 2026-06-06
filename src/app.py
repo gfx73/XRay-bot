@@ -49,18 +49,20 @@ async def check_subscriptions(bot: Bot):
 
                     if user.profiles_data:
                         try:
-                            profile = json.loads(user.profiles_data)
-                            email = profile.get("email")
-                            if email:
-                                try:
-                                    success = await delete_client_by_email(email)
-                                    if success:
-                                        logger.info(f"✅ Deleted expired client {email}")
-                                    else:
-                                        logger.warning(f"⚠️ Failed to delete {email}")
-                                    deleted_any = True
-                                except Exception as e:
-                                    logger.warning(f"⚠️ Deletion error for {email}: {e}")
+                            profiles = json.loads(user.profiles_data)
+                            if isinstance(profiles, dict) and "standard" in profiles:
+                                for slot_profile in profiles.values():
+                                    email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
+                                    if email:
+                                        try:
+                                            success = await delete_client_by_email(email)
+                                            if success:
+                                                logger.info(f"✅ Deleted expired client {email}")
+                                            else:
+                                                logger.warning(f"⚠️ Failed to delete {email}")
+                                            deleted_any = True
+                                        except Exception as e:
+                                            logger.warning(f"⚠️ Deletion error for {email}: {e}")
                         except Exception as e:
                             logger.warning(f"⚠️ Error parsing profiles_data for user {user.telegram_id}: {e}")
 
