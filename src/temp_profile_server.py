@@ -15,7 +15,7 @@ from io import BytesIO
 import base64
 
 from config import config
-from functions import XUIAPI
+from functions import XUIAPI, generate_vless_url_temp
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -35,59 +35,80 @@ TEMP_PROFILE_LIFETIME = timedelta(minutes=30)
 
 class TempProfileAPI(XUIAPI):
     """API для работы с временными профилями"""
-    
+
+    def _get_temp_inbound_cfg(self) -> Optional[dict]:
+        cfgs = config.get_temp_inbound_configs()
+        return cfgs[0] if cfgs else None
+
     async def create_temp_profile(self, session_id: str) -> Optional[dict]:
         """Создание временного профиля"""
         logger.info(f"🔍 Creating temp profile for session {session_id}")
-        
+
+        inbound_cfg = self._get_temp_inbound_cfg()
+        if not inbound_cfg:
+            logger.error("🛑 No temp inbounds configured")
+            return None
+
+        inbound_id = inbound_cfg["id"]
+        protocol = inbound_cfg.get("protocol", "reality")
+
         if not await self.login():
             logger.error("🛑 Login failed before creating temp profile")
             return None
-        
-        # Вычисляем время истечения (текущее + 30 минут)
+
         expiry_time = int((datetime.utcnow() + TEMP_PROFILE_LIFETIME).timestamp())
         logger.info(f"🔍 Temp profile expiry time: {expiry_time} ({datetime.fromtimestamp(expiry_time)})")
-        
+
         try:
-            inbound = await self.get_inbound(config.TEMP_INBOUND_ID)
+            inbound = await self.get_inbound(inbound_id)
             if not inbound:
-                logger.error(f"🛑 Temp inbound {config.TEMP_INBOUND_ID} not found")
+                logger.error(f"🛑 Temp inbound {inbound_id} not found")
                 return None
-            
+
             settings = json.loads(inbound["settings"])
             clients = settings.get("clients", [])
-            
+
             client_id = str(uuid.uuid4())
             email = f"temp_{session_id}_{random.randint(1000, 9999)}"
-            
-            # Получаем flow из инбаунда
-            flow = await self._get_flow_from_inbound(inbound)
-            
-            # Генерируем sub_id
             sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"temp_{session_id}"))
-            
-            new_client = {
-                "id": client_id,
-                "flow": flow,
-                "email": email,
-                "limitIp": 0,
-                "totalGB": 0,
-                "expiryTime": expiry_time * 1000,  # 3x-ui ожидает миллисекунды!
-                "enable": True,
-                "tgId": "",
-                "subId": sub_id,
-                "reset": 0,
-                "fingerprint": config.TEMP_REALITY_FINGERPRINT,
-                "publicKey": config.TEMP_REALITY_PUBLIC_KEY,
-                "shortId": config.TEMP_REALITY_SHORT_ID,
-                "spiderX": config.TEMP_REALITY_SPIDER_X
-            }
-            
+
+            if protocol == "reality":
+                flow = await self._get_flow_from_inbound(inbound)
+                new_client = {
+                    "id": client_id,
+                    "flow": flow,
+                    "email": email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": expiry_time * 1000,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": sub_id,
+                    "reset": 0,
+                    "fingerprint": inbound_cfg.get("fingerprint", ""),
+                    "publicKey": inbound_cfg.get("public_key", ""),
+                    "shortId": inbound_cfg.get("short_id", ""),
+                    "spiderX": inbound_cfg.get("spider_x", ""),
+                }
+            else:
+                new_client = {
+                    "id": client_id,
+                    "flow": "",
+                    "email": email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": expiry_time * 1000,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": sub_id,
+                    "reset": 0,
+                }
+
             logger.info(f"🔍 Creating temp client: {email}, expiryTime: {new_client['expiryTime']}")
-            
+
             clients.append(new_client)
             settings["clients"] = clients
-            
+
             update_data = {
                 "up": inbound["up"],
                 "down": inbound["down"],
@@ -102,50 +123,66 @@ class TempProfileAPI(XUIAPI):
                 "streamSettings": inbound["streamSettings"],
                 "sniffing": inbound["sniffing"],
             }
-            
-            if await self.update_inbound(config.TEMP_INBOUND_ID, update_data):
+
+            if await self.update_inbound(inbound_id, update_data):
                 logger.info(f"✅ Temp profile created successfully: {email}")
-                return {
+                profile_data = {
                     "client_id": client_id,
                     "email": email,
                     "port": inbound["port"],
-                    "security": "reality",
                     "remark": inbound["remark"],
-                    "sni": config.TEMP_REALITY_SNI,
-                    "pbk": config.TEMP_REALITY_PUBLIC_KEY,
-                    "fp": config.TEMP_REALITY_FINGERPRINT,
-                    "sid": config.TEMP_REALITY_SHORT_ID,
-                    "spx": config.TEMP_REALITY_SPIDER_X,
                     "sub_id": sub_id,
-                    "expiry_time": expiry_time
+                    "expiry_time": expiry_time,
+                    "inbound_id": inbound_id,
                 }
+                if protocol == "reality":
+                    profile_data.update({
+                        "security": "reality",
+                        "sni": inbound_cfg.get("sni", ""),
+                        "pbk": inbound_cfg.get("public_key", ""),
+                        "fp": inbound_cfg.get("fingerprint", ""),
+                        "sid": inbound_cfg.get("short_id", ""),
+                        "spx": inbound_cfg.get("spider_x", ""),
+                    })
+                else:
+                    profile_data.update({
+                        "security": inbound_cfg.get("security", "tls"),
+                        "protocol_type": protocol,
+                        "path": inbound_cfg.get("path", "/"),
+                        "host": inbound_cfg.get("host", config.XUI_HOST),
+                        "sni": inbound_cfg.get("sni", config.XUI_HOST),
+                    })
+                return profile_data
             return None
         except Exception as e:
             logger.exception(f"🛑 Create temp profile error: {e}")
             return None
-    
+
     async def delete_temp_profile(self, email: str) -> bool:
         """Удаление временного профиля"""
+        inbound_cfg = self._get_temp_inbound_cfg()
+        if not inbound_cfg:
+            return False
+
+        inbound_id = inbound_cfg["id"]
+
         if not await self.login():
             return False
-        
+
         try:
-            inbound = await self.get_inbound(config.TEMP_INBOUND_ID)
+            inbound = await self.get_inbound(inbound_id)
             if not inbound:
                 return False
-            
+
             settings = json.loads(inbound["settings"])
             clients = settings.get("clients", [])
-            
-            # Фильтруем клиентов
             new_clients = [c for c in clients if c["email"] != email]
-            
-            # Если не было изменений
+
             if len(new_clients) == len(clients):
                 return False
-            
+
             settings["clients"] = new_clients
-            
+
             update_data = {
                 "up": inbound["up"],
                 "down": inbound["down"],
@@ -160,29 +197,11 @@ class TempProfileAPI(XUIAPI):
                 "streamSettings": inbound["streamSettings"],
                 "sniffing": inbound["sniffing"],
             }
-            
-            return await self.update_inbound(config.TEMP_INBOUND_ID, update_data)
+
+            return await self.update_inbound(inbound_id, update_data)
         except Exception as e:
             logger.exception(f"🛑 Delete temp profile error: {e}")
             return False
-
-
-def generate_vless_url_temp(profile_data: dict) -> str:
-    """Генерирует VLESS URL для временного профиля"""
-    remark = profile_data.get('remark', 'Temp Profile')
-    email = profile_data['email']
-    fragment = f"{remark}-{email}" if remark else email
-    
-    return (
-        f"vless://{profile_data['client_id']}@{config.XUI_HOST}:{profile_data['port']}"
-        f"?type=tcp&security=reality"
-        f"&pbk={config.TEMP_REALITY_PUBLIC_KEY}"
-        f"&fp={config.TEMP_REALITY_FINGERPRINT}"
-        f"&sni={config.TEMP_REALITY_SNI}"
-        f"&sid={config.TEMP_REALITY_SHORT_ID}"
-        f"&spx={config.TEMP_REALITY_SPIDER_X}"
-        f"#{fragment}"
-    )
 
 
 def generate_qr_code(vless_url: str) -> str:
@@ -367,7 +386,8 @@ async def startup_event():
     """Запуск фоновых задач"""
     port = int(config.TEMP_WEB_SERVER_PORT) if isinstance(config.TEMP_WEB_SERVER_PORT, str) else config.TEMP_WEB_SERVER_PORT
     logger.info("🚀 Starting temp profile server...")
-    logger.info(f"📋 Temp inbound ID: {config.TEMP_INBOUND_ID}")
+    temp_cfgs = config.get_temp_inbound_configs()
+    logger.info(f"📋 Temp inbound IDs: {[c['id'] for c in temp_cfgs]}")
     logger.info(f"📋 Web server port: {port}")
     
     # Проверяем SSL сертификаты

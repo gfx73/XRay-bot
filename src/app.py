@@ -9,8 +9,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import PreCheckoutQuery
 from handlers import setup_handlers
 from datetime import datetime, timedelta
-from functions import delete_client_by_email, inbound_id_from_profile
-from database import Session, User, init_db, migrate_database, get_all_users, delete_user_profile
+from functions import delete_client_by_email
+from database import Session, User, init_db, get_all_users, delete_user_profile
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -47,7 +47,6 @@ async def check_subscriptions(bot: Bot):
                 if user.subscription_end <= now:
                     deleted_any = False
 
-                    # Новый формат: profiles_data
                     if user.profiles_data:
                         try:
                             profiles = json.loads(user.profiles_data)
@@ -66,20 +65,6 @@ async def check_subscriptions(bot: Bot):
                                     logger.warning(f"⚠️ Deletion error for {email}: {e}")
                         except Exception as e:
                             logger.warning(f"⚠️ Error parsing profiles_data for user {user.telegram_id}: {e}")
-
-                    # Legacy: vless_profile_data
-                    elif user.vless_profile_data:
-                        try:
-                            profile = json.loads(user.vless_profile_data)
-                            email = profile.get("email")
-                            if email:
-                                inbound_id = inbound_id_from_profile(profile)
-                                success = await delete_client_by_email(email, inbound_id)
-                                if success:
-                                    logger.info(f"✅ Deleted legacy expired profile {email}")
-                                deleted_any = True
-                        except Exception as e:
-                            logger.warning(f"⚠️ Deletion error: {e}")
 
                     if deleted_any:
                         await delete_user_profile(user.telegram_id)
@@ -139,9 +124,6 @@ async def main():
     try:
         await init_db()
         logger.info("✅ Database initialized")
-        # Миграция: добавляет новые столбцы и конвертирует legacy-данные
-        await migrate_database()
-        logger.info("✅ Database migration completed")
         await update_admins_status()
     except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")

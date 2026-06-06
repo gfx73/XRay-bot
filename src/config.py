@@ -18,21 +18,6 @@ class Config(BaseModel):
     XUI_VERIFY_SSL: bool = Field(default=os.getenv("XUI_VERIFY_SSL", "True").lower() == "true")
     PAYMENT_TOKEN: str = os.getenv("PAYMENT_TOKEN", "")
 
-    # Старые поля оставляем для backwards-compat (используются при миграции данных)
-    INBOUND_ID: int = Field(default=os.getenv("INBOUND_ID", 1))
-    REALITY_PUBLIC_KEY: str = os.getenv("REALITY_PUBLIC_KEY", "")
-    REALITY_FINGERPRINT: str = os.getenv("REALITY_FINGERPRINT", "chrome")
-    REALITY_SNI: str = os.getenv("REALITY_SNI", "example.com")
-    REALITY_SHORT_ID: str = os.getenv("REALITY_SHORT_ID", "1234567890")
-    REALITY_SPIDER_X: str = os.getenv("REALITY_SPIDER_X", "/")
-
-    # Временные профили (30 минут) - старые поля оставляем для backwards-compat
-    TEMP_INBOUND_ID: int = Field(default=os.getenv("TEMP_INBOUND_ID", 2))
-    TEMP_REALITY_PUBLIC_KEY: str = os.getenv("TEMP_REALITY_PUBLIC_KEY", "")
-    TEMP_REALITY_FINGERPRINT: str = os.getenv("TEMP_REALITY_FINGERPRINT", "chrome")
-    TEMP_REALITY_SNI: str = os.getenv("TEMP_REALITY_SNI", "example.com")
-    TEMP_REALITY_SHORT_ID: str = os.getenv("TEMP_REALITY_SHORT_ID", "1234567890")
-    TEMP_REALITY_SPIDER_X: str = os.getenv("TEMP_REALITY_SPIDER_X", "/")
     TEMP_WEB_SERVER_PORT: int = Field(default=os.getenv("TEMP_WEB_SERVER_PORT", 8080))
     TEMP_SSL_CERT_PATH: str = os.getenv("TEMP_SSL_CERT_PATH", "")
     TEMP_SSL_KEY_PATH: str = os.getenv("TEMP_SSL_KEY_PATH", "")
@@ -67,18 +52,6 @@ class Config(BaseModel):
         if isinstance(value, str):
             return [int(admin) for admin in value.split(",") if admin.strip()]
         return value or []
-
-    @field_validator('INBOUND_ID', mode='before')
-    def parse_inbound_id(cls, value):
-        if isinstance(value, str):
-            return int(value)
-        return value or 15
-
-    @field_validator('TEMP_INBOUND_ID', mode='before')
-    def parse_temp_inbound_id(cls, value):
-        if isinstance(value, str):
-            return int(value)
-        return value or 2
 
     @field_validator('TEMP_WEB_SERVER_PORT', mode='before')
     def parse_temp_web_server_port(cls, value):
@@ -128,44 +101,17 @@ class Config(BaseModel):
         """
         Возвращает список конфигов инбаундов для заданного тарифа.
 
-        Если BASIC_INBOUNDS / PREMIUM_INBOUNDS не заданы — падбэк на старые поля
-        (INBOUND_ID + REALITY_* для basic, то же + ничего для premium, т.к. xhttp не настроен).
-
         Пример возвращаемого элемента для Reality:
           {"id": 1, "protocol": "reality", "public_key": "...", "sni": "...", ...}
         Для xhttp:
           {"id": 3, "protocol": "xhttp", "sni": "...", "path": "/", "security": "tls", ...}
         """
         raw = self.PREMIUM_INBOUNDS if tier == "premium" else self.BASIC_INBOUNDS
-        if raw:
-            return self._parse_inbound_configs_raw(raw)
-
-        # Backwards-compat: если новые переменные не заданы, используем старые
-        fallback = {
-            "id": self.INBOUND_ID,
-            "protocol": "reality",
-            "public_key": self.REALITY_PUBLIC_KEY,
-            "fingerprint": self.REALITY_FINGERPRINT,
-            "sni": self.REALITY_SNI,
-            "short_id": self.REALITY_SHORT_ID,
-            "spider_x": self.REALITY_SPIDER_X,
-        }
-        return [fallback]
+        return self._parse_inbound_configs_raw(raw)
 
     def get_temp_inbound_configs(self) -> list[dict]:
         """Возвращает список конфигов временных инбаундов."""
-        if self.TEMP_INBOUND_CONFIGS:
-            return self._parse_inbound_configs_raw(self.TEMP_INBOUND_CONFIGS)
-        # Backwards-compat
-        return [{
-            "id": self.TEMP_INBOUND_ID,
-            "protocol": "reality",
-            "public_key": self.TEMP_REALITY_PUBLIC_KEY,
-            "fingerprint": self.TEMP_REALITY_FINGERPRINT,
-            "sni": self.TEMP_REALITY_SNI,
-            "short_id": self.TEMP_REALITY_SHORT_ID,
-            "spider_x": self.TEMP_REALITY_SPIDER_X,
-        }]
+        return self._parse_inbound_configs_raw(self.TEMP_INBOUND_CONFIGS)
 
     def calculate_price(self, months: int, tier: str = "basic") -> int:
         """Вычисляет итоговую стоимость с учётом скидки и тарифа."""
@@ -187,5 +133,4 @@ class Config(BaseModel):
 
 config = Config(
     ADMINS=os.getenv("ADMINS", ""),
-    INBOUND_ID=os.getenv("INBOUND_ID", 15)
 )

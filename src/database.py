@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 import logging
@@ -16,8 +16,6 @@ class User(Base):
     username = Column(String)
     registration_date = Column(DateTime, default=datetime.utcnow)
     subscription_end = Column(DateTime)
-    vless_profile_id = Column(String)           # legacy
-    vless_profile_data = Column(String)          # legacy (одиночный профиль)
     is_admin = Column(Boolean, default=False)
     notified = Column(Boolean, default=False)
     # ── Новые поля ──────────────────────────────────────────
@@ -37,46 +35,6 @@ Session = sessionmaker(bind=engine)
 async def init_db():
     Base.metadata.create_all(engine)
     logger.info("✅ Database tables created")
-
-async def migrate_database():
-    """
-    Идемпотентная миграция: добавляет новые столбцы и конвертирует
-    vless_profile_data → profiles_data для существующих пользователей.
-    Безопасно запускать при каждом старте бота.
-    """
-    from config import config
-
-    # 1. Добавляем новые столбцы (ошибка = столбец уже есть, игнорируем)
-    with engine.connect() as conn:
-        for stmt in [
-            "ALTER TABLE users ADD COLUMN subscription_tier TEXT NOT NULL DEFAULT 'basic'",
-            "ALTER TABLE users ADD COLUMN profiles_data TEXT",
-        ]:
-            try:
-                conn.execute(text(stmt))
-                conn.commit()
-                logger.info(f"✅ Migration: executed: {stmt[:60]}...")
-            except Exception:
-                pass  # столбец уже существует
-
-    # 2. Конвертируем vless_profile_data → profiles_data для существующих пользователей
-    migrated = 0
-    with Session() as session:
-        users = session.query(User).filter(
-            User.vless_profile_data.isnot(None),
-            User.profiles_data.is_(None)
-        ).all()
-        for user in users:
-            try:
-                old = json.loads(user.vless_profile_data)
-                old["inbound_id"] = config.INBOUND_ID
-                user.profiles_data = json.dumps({str(config.INBOUND_ID): old})
-                migrated += 1
-            except Exception as e:
-                logger.error(f"🛑 Migration error for user {user.telegram_id}: {e}")
-        if migrated:
-            session.commit()
-            logger.info(f"✅ Migration: converted {migrated} legacy profiles to profiles_data")
 
 async def get_user(telegram_id: int):
     with Session() as session:
@@ -106,11 +64,10 @@ async def create_user(telegram_id: int, full_name: str, username: str = None, is
         return user
 
 async def delete_user_profile(telegram_id: int):
-    """Очищает данные профилей пользователя (legacy + новое поле)."""
+    """Очищает данные профилей пользователя."""
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
-            user.vless_profile_data = None
             user.profiles_data = None
             user.notified = False
             session.commit()
@@ -170,11 +127,9 @@ async def get_user_stats():
         return total, with_sub, without_sub
 
 async def get_users_with_profiles():
-    """Получает всех пользователей с профилями (legacy или новый формат)."""
+    """Получает всех пользователей с профилями."""
     with Session() as session:
-        return session.query(User).filter(
-            (User.profiles_data.isnot(None)) | (User.vless_profile_data.isnot(None))
-        ).all()
+        return session.query(User).filter(User.profiles_data.isnot(None)).all()
 
 async def fix_all_subscription_dates():
     """Исправляет все некорректные даты подписок в базе данных."""
@@ -199,10 +154,8 @@ async def delete_user(telegram_id: int) -> bool:
             # Удаляем все профили из 3x-ui
             profiles_to_delete: list[tuple[str, int]] = []  # (email, inbound_id)
 
-            # Новый формат profiles_data
             if user.profiles_data:
                 try:
-                    from config import config as _config
                     profiles = json.loads(user.profiles_data)
                     for inbound_id_str, pdata in profiles.items():
                         email = pdata.get("email")
@@ -210,17 +163,6 @@ async def delete_user(telegram_id: int) -> bool:
                             profiles_to_delete.append((email, int(inbound_id_str)))
                 except Exception as e:
                     logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
-
-            # Legacy: vless_profile_data (если profiles_data не заполнен)
-            elif user.vless_profile_data:
-                try:
-                    from config import config as _config
-                    pdata = json.loads(user.vless_profile_data)
-                    email = pdata.get("email")
-                    if email:
-                        profiles_to_delete.append((email, _config.INBOUND_ID))
-                except Exception as e:
-                    logger.error(f"🛑 Error parsing vless_profile_data for user {telegram_id}: {e}")
 
             for email, inbound_id in profiles_to_delete:
                 try:

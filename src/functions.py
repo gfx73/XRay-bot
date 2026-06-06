@@ -14,12 +14,6 @@ logger = logging.getLogger(__name__)
 # Вспомогательные функции
 # ──────────────────────────────────────────────────────────────
 
-def inbound_id_from_profile(profile_data: dict) -> int:
-    """Возвращает inbound_id, сохранённый внутри profile_data.
-    Если поле отсутствует — возвращает дефолтный INBOUND_ID."""
-    return int(profile_data.get("inbound_id", config.INBOUND_ID))
-
-
 def safe_json_loads(value, default=None):
     """Безопасный JSON-парсинг с дефолтным значением."""
     if not value:
@@ -234,10 +228,10 @@ class XUIAPI:
                     "tgId": "",
                     "subId": sub_id,
                     "reset": 0,
-                    "fingerprint": inbound_cfg.get("fingerprint", config.REALITY_FINGERPRINT),
-                    "publicKey": inbound_cfg.get("public_key", config.REALITY_PUBLIC_KEY),
-                    "shortId": inbound_cfg.get("short_id", config.REALITY_SHORT_ID),
-                    "spiderX": inbound_cfg.get("spider_x", config.REALITY_SPIDER_X),
+                    "fingerprint": inbound_cfg.get("fingerprint", ""),
+                    "publicKey": inbound_cfg.get("public_key", ""),
+                    "shortId": inbound_cfg.get("short_id", ""),
+                    "spiderX": inbound_cfg.get("spider_x", ""),
                 }
             else:
                 # xhttp / other transports — НЕТ Reality-полей
@@ -284,11 +278,11 @@ class XUIAPI:
                 if protocol == "reality":
                     profile_data.update({
                         "security": "reality",
-                        "sni": inbound_cfg.get("sni", config.REALITY_SNI),
-                        "pbk": inbound_cfg.get("public_key", config.REALITY_PUBLIC_KEY),
-                        "fp": inbound_cfg.get("fingerprint", config.REALITY_FINGERPRINT),
-                        "sid": inbound_cfg.get("short_id", config.REALITY_SHORT_ID),
-                        "spx": inbound_cfg.get("spider_x", config.REALITY_SPIDER_X),
+                        "sni": inbound_cfg.get("sni", ""),
+                        "pbk": inbound_cfg.get("public_key", ""),
+                        "fp": inbound_cfg.get("fingerprint", ""),
+                        "sid": inbound_cfg.get("short_id", ""),
+                        "spx": inbound_cfg.get("spider_x", ""),
                     })
                 else:
                     security = inbound_cfg.get("security", "tls")
@@ -307,14 +301,23 @@ class XUIAPI:
             return None
 
     async def create_static_client(self, profile_name: str):
-        """Создание статического клиента (legacy, только Reality)."""
+        """Создание статического клиента в первом Basic-инбаунде."""
+        basic_configs = config.get_inbound_configs("basic")
+        if not basic_configs:
+            logger.error("🛑 No basic inbounds configured for static client")
+            return None
+
+        inbound_cfg = basic_configs[0]
+        inbound_id = inbound_cfg["id"]
+        protocol = inbound_cfg.get("protocol", "reality")
+
         if not await self.login():
             logger.error("🛑 Login failed before creating static client")
             return None
 
-        inbound = await self.get_inbound(config.INBOUND_ID)
+        inbound = await self.get_inbound(inbound_id)
         if not inbound:
-            logger.error(f"🛑 Inbound {config.INBOUND_ID} not found")
+            logger.error(f"🛑 Inbound {inbound_id} not found")
             return None
 
         try:
@@ -322,24 +325,39 @@ class XUIAPI:
             clients = settings.get("clients", [])
             client_id = str(uuid.uuid4())
             sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"static_{profile_name}"))
-            flow = await self._get_flow_from_inbound(inbound)
 
-            new_client = {
-                "id": client_id,
-                "flow": flow,
-                "email": profile_name,
-                "limitIp": 0,
-                "totalGB": 0,
-                "expiryTime": 0,
-                "enable": True,
-                "tgId": "",
-                "subId": sub_id,
-                "reset": 0,
-                "fingerprint": config.REALITY_FINGERPRINT,
-                "publicKey": config.REALITY_PUBLIC_KEY,
-                "shortId": config.REALITY_SHORT_ID,
-                "spiderX": config.REALITY_SPIDER_X,
-            }
+            if protocol == "reality":
+                flow = await self._get_flow_from_inbound(inbound)
+                new_client = {
+                    "id": client_id,
+                    "flow": flow,
+                    "email": profile_name,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": sub_id,
+                    "reset": 0,
+                    "fingerprint": inbound_cfg.get("fingerprint", ""),
+                    "publicKey": inbound_cfg.get("public_key", ""),
+                    "shortId": inbound_cfg.get("short_id", ""),
+                    "spiderX": inbound_cfg.get("spider_x", ""),
+                }
+            else:
+                new_client = {
+                    "id": client_id,
+                    "flow": "",
+                    "email": profile_name,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": sub_id,
+                    "reset": 0,
+                }
+
             clients.append(new_client)
             settings["clients"] = clients
 
@@ -358,21 +376,33 @@ class XUIAPI:
                 "sniffing": inbound["sniffing"],
             }
 
-            if await self.update_inbound(config.INBOUND_ID, update_data):
-                return {
+            if await self.update_inbound(inbound_id, update_data):
+                profile_data = {
                     "client_id": client_id,
                     "email": profile_name,
                     "port": inbound["port"],
-                    "security": "reality",
                     "remark": inbound["remark"],
-                    "sni": config.REALITY_SNI,
-                    "pbk": config.REALITY_PUBLIC_KEY,
-                    "fp": config.REALITY_FINGERPRINT,
-                    "sid": config.REALITY_SHORT_ID,
-                    "spx": config.REALITY_SPIDER_X,
                     "sub_id": sub_id,
-                    "inbound_id": config.INBOUND_ID,
+                    "inbound_id": inbound_id,
                 }
+                if protocol == "reality":
+                    profile_data.update({
+                        "security": "reality",
+                        "sni": inbound_cfg.get("sni", ""),
+                        "pbk": inbound_cfg.get("public_key", ""),
+                        "fp": inbound_cfg.get("fingerprint", ""),
+                        "sid": inbound_cfg.get("short_id", ""),
+                        "spx": inbound_cfg.get("spider_x", ""),
+                    })
+                else:
+                    profile_data.update({
+                        "security": inbound_cfg.get("security", "tls"),
+                        "protocol_type": protocol,
+                        "path": inbound_cfg.get("path", "/"),
+                        "host": inbound_cfg.get("host", config.XUI_HOST),
+                        "sni": inbound_cfg.get("sni", config.XUI_HOST),
+                    })
+                return profile_data
             return None
         except Exception as e:
             logger.exception(f"🛑 Create static client error: {e}")
@@ -382,11 +412,8 @@ class XUIAPI:
     # Управление клиентами
     # ────────────────────────────────────────────────────────
 
-    async def delete_client(self, email: str, inbound_id: int = None):
+    async def delete_client(self, email: str, inbound_id: int):
         """Удаление клиента по email из указанного инбаунда."""
-        if inbound_id is None:
-            inbound_id = config.INBOUND_ID
-
         if not await self.login():
             return False
 
@@ -423,17 +450,14 @@ class XUIAPI:
             logger.exception(f"🛑 Delete client error: {e}")
             return False
 
-    async def update_client_expiry(self, email: str, expiry_time: int, inbound_id: int = None):
+    async def update_client_expiry(self, email: str, expiry_time: int, inbound_id: int):
         """Обновление времени истечения подписки клиента.
 
         Args:
             email: Email клиента
             expiry_time: Новое время истечения в timestamp (0 = бессрочно)
-            inbound_id: ID инбаунда (дефолт — config.INBOUND_ID)
+            inbound_id: ID инбаунда
         """
-        if inbound_id is None:
-            inbound_id = config.INBOUND_ID
-
         logger.info(f"🔍 [update_client_expiry] Updating client {email} with expiry_time: {expiry_time}, inbound: {inbound_id}")
 
         if not await self.login():
@@ -488,11 +512,8 @@ class XUIAPI:
             logger.exception(f"🛑 Update client expiry error: {e}")
             return False
 
-    async def get_all_clients(self, inbound_id: int = None):
+    async def get_all_clients(self, inbound_id: int):
         """Получает всех клиентов из указанного инбаунда."""
-        if inbound_id is None:
-            inbound_id = config.INBOUND_ID
-
         if not await self.login():
             logger.error("🛑 Login failed before getting clients")
             return None
@@ -628,11 +649,8 @@ async def create_static_client(profile_name: str):
         await api.close()
 
 
-async def delete_client_by_email(email: str, inbound_id: int = None):
-    """Удаляет клиента по email из указанного инбаунда.
-    Если inbound_id не задан — используется config.INBOUND_ID."""
-    if inbound_id is None:
-        inbound_id = config.INBOUND_ID
+async def delete_client_by_email(email: str, inbound_id: int):
+    """Удаляет клиента по email из указанного инбаунда."""
     api = XUIAPI()
     try:
         return await api.delete_client(email, inbound_id)
@@ -640,10 +658,8 @@ async def delete_client_by_email(email: str, inbound_id: int = None):
         await api.close()
 
 
-async def update_client_expiry(email: str, expiry_time: int, inbound_id: int = None):
+async def update_client_expiry(email: str, expiry_time: int, inbound_id: int):
     """Обновляет expiry клиента в указанном инбаунде."""
-    if inbound_id is None:
-        inbound_id = config.INBOUND_ID
     api = XUIAPI()
     try:
         return await api.update_client_expiry(email, expiry_time, inbound_id)
@@ -652,9 +668,19 @@ async def update_client_expiry(email: str, expiry_time: int, inbound_id: int = N
 
 
 async def get_global_stats():
+    """Агрегирует статистику по всем сконфигурированным инбаундам."""
+    all_inbound_ids: set[int] = set()
+    for tier in ("basic", "premium"):
+        for cfg in config.get_inbound_configs(tier):
+            all_inbound_ids.add(cfg["id"])
     api = XUIAPI()
     try:
-        return await api.get_global_stats(config.INBOUND_ID)
+        total = {"upload": 0, "download": 0}
+        for inbound_id in all_inbound_ids:
+            stats = await api.get_global_stats(inbound_id)
+            total["upload"] += stats.get("upload", 0)
+            total["download"] += stats.get("download", 0)
+        return total
     finally:
         await api.close()
 
@@ -700,11 +726,11 @@ def generate_vless_url(profile_data: dict) -> str:
     port = profile_data.get('port', 443)
 
     if security == 'reality':
-        pbk = profile_data.get('pbk', config.REALITY_PUBLIC_KEY)
-        fp = profile_data.get('fp', config.REALITY_FINGERPRINT)
-        sni = profile_data.get('sni', config.REALITY_SNI)
-        sid = profile_data.get('sid', config.REALITY_SHORT_ID)
-        spx = profile_data.get('spx', config.REALITY_SPIDER_X)
+        pbk = profile_data.get('pbk', '')
+        fp = profile_data.get('fp', '')
+        sni = profile_data.get('sni', '')
+        sid = profile_data.get('sid', '')
+        spx = profile_data.get('spx', '')
         return (
             f"vless://{client_id}@{config.XUI_HOST}:{port}"
             f"?type=tcp&security=reality"
@@ -734,11 +760,11 @@ def generate_vless_url_temp(profile_data: dict) -> str:
     port = profile_data.get('port', 443)
 
     if security == 'reality':
-        pbk = profile_data.get('pbk', config.TEMP_REALITY_PUBLIC_KEY)
-        fp = profile_data.get('fp', config.TEMP_REALITY_FINGERPRINT)
-        sni = profile_data.get('sni', config.TEMP_REALITY_SNI)
-        sid = profile_data.get('sid', config.TEMP_REALITY_SHORT_ID)
-        spx = profile_data.get('spx', config.TEMP_REALITY_SPIDER_X)
+        pbk = profile_data.get('pbk', '')
+        fp = profile_data.get('fp', '')
+        sni = profile_data.get('sni', '')
+        sid = profile_data.get('sid', '')
+        spx = profile_data.get('spx', '')
         return (
             f"vless://{client_id}@{config.XUI_HOST}:{port}"
             f"?type=tcp&security=reality"
@@ -799,10 +825,8 @@ def get_safe_expiry_timestamp(subscription_end) -> int:
         return 0
 
 
-async def force_update_profile_expiry(email: str, subscription_end, inbound_id: int = None) -> bool:
+async def force_update_profile_expiry(email: str, subscription_end, inbound_id: int) -> bool:
     """Принудительно обновляет время истечения существующего профиля."""
-    if inbound_id is None:
-        inbound_id = config.INBOUND_ID
     try:
         logger.info(f"🔍 [force_update_profile_expiry] email: {email}, inbound: {inbound_id}")
         expiry_time = get_safe_expiry_timestamp(subscription_end)
@@ -854,7 +878,6 @@ async def check_and_fix_subscriptions() -> dict:
         # Маппинг email → (user, inbound_id)
         users_map: dict[str, tuple] = {}
         for user in users_db:
-            # Новый формат profiles_data
             if user.profiles_data:
                 try:
                     profiles = json.loads(user.profiles_data)
@@ -864,15 +887,6 @@ async def check_and_fix_subscriptions() -> dict:
                             users_map[email] = (user, int(inbound_id_str))
                 except Exception as e:
                     logger.error(f"🛑 Error parsing profiles_data for user {user.telegram_id}: {e}")
-            # Legacy
-            elif user.vless_profile_data:
-                try:
-                    pdata = safe_json_loads(user.vless_profile_data, default={})
-                    email = pdata.get("email")
-                    if email:
-                        users_map[email] = (user, config.INBOUND_ID)
-                except Exception as e:
-                    logger.error(f"🛑 Error parsing vless_profile_data for user {user.telegram_id}: {e}")
 
         stats = {
             "total_3xui": len(all_clients_3xui),
@@ -887,7 +901,7 @@ async def check_and_fix_subscriptions() -> dict:
         for client in all_clients_3xui:
             email = client.get("email")
             expiry_time_3xui = client.get("expiryTime", 0)
-            inbound_id = client.get("_inbound_id", config.INBOUND_ID)
+            inbound_id = client.get("_inbound_id", 0)
 
             if not email or email == "Base":
                 continue
@@ -1021,10 +1035,10 @@ async def create_temp_profile(session_id: str, inbound_cfg: dict = None) -> Opti
                 "tgId": "",
                 "subId": sub_id,
                 "reset": 0,
-                "fingerprint": inbound_cfg.get("fingerprint", config.TEMP_REALITY_FINGERPRINT),
-                "publicKey": inbound_cfg.get("public_key", config.TEMP_REALITY_PUBLIC_KEY),
-                "shortId": inbound_cfg.get("short_id", config.TEMP_REALITY_SHORT_ID),
-                "spiderX": inbound_cfg.get("spider_x", config.TEMP_REALITY_SPIDER_X),
+                "fingerprint": inbound_cfg.get("fingerprint", ""),
+                "publicKey": inbound_cfg.get("public_key", ""),
+                "shortId": inbound_cfg.get("short_id", ""),
+                "spiderX": inbound_cfg.get("spider_x", ""),
             }
         else:
             new_client = {
@@ -1072,11 +1086,11 @@ async def create_temp_profile(session_id: str, inbound_cfg: dict = None) -> Opti
             if protocol == "reality":
                 profile_data.update({
                     "security": "reality",
-                    "sni": inbound_cfg.get("sni", config.TEMP_REALITY_SNI),
-                    "pbk": inbound_cfg.get("public_key", config.TEMP_REALITY_PUBLIC_KEY),
-                    "fp": inbound_cfg.get("fingerprint", config.TEMP_REALITY_FINGERPRINT),
-                    "sid": inbound_cfg.get("short_id", config.TEMP_REALITY_SHORT_ID),
-                    "spx": inbound_cfg.get("spider_x", config.TEMP_REALITY_SPIDER_X),
+                    "sni": inbound_cfg.get("sni", ""),
+                    "pbk": inbound_cfg.get("public_key", ""),
+                    "fp": inbound_cfg.get("fingerprint", ""),
+                    "sid": inbound_cfg.get("short_id", ""),
+                    "spx": inbound_cfg.get("spider_x", ""),
                 })
             else:
                 profile_data.update({
@@ -1095,11 +1109,8 @@ async def create_temp_profile(session_id: str, inbound_cfg: dict = None) -> Opti
         await api.close()
 
 
-async def delete_temp_profile(email: str, inbound_id: int = None) -> bool:
+async def delete_temp_profile(email: str, inbound_id: int) -> bool:
     """Удаляет временный профиль."""
-    if inbound_id is None:
-        inbound_id = config.TEMP_INBOUND_ID
-
     logger.info(f"🔍 Deleting temp profile: {email} from inbound {inbound_id}")
     return await delete_client_by_email(email, inbound_id)
 

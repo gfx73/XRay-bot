@@ -18,7 +18,7 @@ from database import (
     fix_all_subscription_dates, get_users_with_profiles,
 )
 from functions import (
-    create_profile, inbound_id_from_profile,
+    create_profile,
     delete_client_by_email, generate_vless_url,
     get_user_stats, create_static_client, get_global_stats,
     get_online_users, generate_sub_url, update_client_expiry,
@@ -71,16 +71,8 @@ def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
 # ────────────────────────────────────────────────────────────
 
 def _get_profiles_dict(user) -> dict:
-    """Возвращает все профили пользователя как dict {inbound_id_str: profile_data}.
-    Прозрачно поддерживает legacy vless_profile_data."""
-    if user.profiles_data:
-        return safe_json_loads(user.profiles_data, default={})
-    # Legacy fallback
-    if user.vless_profile_data:
-        pdata = safe_json_loads(user.vless_profile_data, default={})
-        if pdata:
-            return {str(config.INBOUND_ID): pdata}
-    return {}
+    """Возвращает все профили пользователя как dict {inbound_id_str: profile_data}."""
+    return safe_json_loads(user.profiles_data, default={})
 
 
 def _get_sub_id(user) -> str | None:
@@ -406,19 +398,17 @@ async def noop_handler(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment(callback: CallbackQuery, bot: Bot):
     """Обработчик нажатия кнопки оплаты.
-    Формат callback_data: pay_{tier}_{months} или (legacy) pay_{months}.
+    Формат callback_data: pay_{tier}_{months}
     """
     await callback.answer()
     try:
         parts = callback.data.split("_")
-        # pay_basic_3  → parts = ["pay", "basic", "3"]
-        # pay_1 (legacy) → parts = ["pay", "1"]
-        if len(parts) == 3:
-            tier = parts[1]   # "basic" | "premium"
-            months = int(parts[2])
-        else:
-            tier = "basic"
-            months = int(parts[1])
+        # pay_basic_3 → parts = ["pay", "basic", "3"]
+        if len(parts) != 3:
+            await callback.message.answer("❌ Неверный формат кнопки оплаты")
+            return
+        tier = parts[1]   # "basic" | "premium"
+        months = int(parts[2])
 
         if months not in config.PRICES:
             await callback.message.answer("❌ Неверный период подписки")
@@ -459,16 +449,15 @@ async def process_successful_payment(message: Message, bot: Bot):
     try:
         payload = message.successful_payment.invoice_payload
 
-        # Поддержка форматов:
-        #   subscription_basic_3   (новый)
-        #   subscription_3         (legacy)
+        # Формат: subscription_{tier}_{months}
         if payload.startswith("subscription_"):
             remainder = payload[len("subscription_"):]
             parts = remainder.split("_")
             if len(parts) == 2 and parts[0] in ("basic", "premium"):
                 tier, months = parts[0], int(parts[1])
             else:
-                tier, months = "basic", int(parts[0])
+                await message.answer("❌ Ошибка: неверный формат платежа")
+                return
         else:
             await message.answer("❌ Ошибка: неверный формат платежа")
             return
@@ -1040,7 +1029,9 @@ async def handle_delete_static_profile(callback: CallbackQuery):
             if not profile:
                 await callback.answer("⚠️ Профиль не найден")
                 return
-            await delete_client_by_email(profile.name)
+            basic_configs = config.get_inbound_configs("basic")
+            if basic_configs:
+                await delete_client_by_email(profile.name, basic_configs[0]["id"])
             session.delete(profile)
             session.commit()
         await callback.answer("✅ Профиль удален!")
