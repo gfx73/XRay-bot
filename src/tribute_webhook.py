@@ -10,12 +10,12 @@ from fastapi import FastAPI, Request, HTTPException
 from config import config
 from database import Session, User, get_user, create_user, update_subscription
 from functions import (
-    create_profile,
+    create_client,
     delete_client_by_email,
     update_client_expiry,
     get_safe_expiry_timestamp,
+    safe_json_loads,
 )
-from handlers import _get_profiles_dict, _delete_extra_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -27,34 +27,33 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 
 
 async def _sync_profiles(telegram_id: int, tier: str, bot: Bot) -> None:
-    """Создаёт/обновляет/удаляет профили в 3x-ui после активации Tribute-подписки.
-    Повторяет логику process_successful_payment из handlers.py."""
+    """Создаёт/обновляет VPN-клиента в 3x-ui после активации Tribute-подписки."""
     updated_user = await get_user(telegram_id)
     if not updated_user:
         return
 
-    inbound_configs = config.get_inbound_configs(tier)
-    new_inbound_ids = {cfg["id"] for cfg in inbound_configs}
-
-    current_profiles = _get_profiles_dict(updated_user)
-    current_profiles = await _delete_extra_profiles(telegram_id, current_profiles, new_inbound_ids)
-
+    inbound_cfgs = config.get_inbound_configs(tier)
+    new_inbound_id_set = {cfg["id"] for cfg in inbound_cfgs}
     expiry_time = get_safe_expiry_timestamp(updated_user.subscription_end)
-    for cfg in inbound_configs:
-        iid_str = str(cfg["id"])
-        if iid_str in current_profiles:
-            email = current_profiles[iid_str].get("email")
-            if email:
-                await update_client_expiry(email, expiry_time, cfg["id"])
+    existing = safe_json_loads(updated_user.profiles_data, default=None)
+    existing = existing if (existing and "email" in existing) else None
+
+    if existing:
+        current_inbound_ids = set(existing.get("inbound_ids", []))
+        if current_inbound_ids == new_inbound_id_set:
+            await update_client_expiry(existing["email"], expiry_time)
+            profile_to_save = existing
         else:
-            pdata = await create_profile(telegram_id, expiry_time, cfg)
-            if pdata:
-                current_profiles[iid_str] = pdata
+            await delete_client_by_email(existing["email"])
+            profile_to_save = await create_client(telegram_id, expiry_time, inbound_cfgs)
+    else:
+        profile_to_save = await create_client(telegram_id, expiry_time, inbound_cfgs)
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if db_user:
-            db_user.profiles_data = json.dumps(current_profiles)
+            if profile_to_save:
+                db_user.profiles_data = json.dumps(profile_to_save)
             db_user.subscription_tier = tier
             session.commit()
 

@@ -49,17 +49,15 @@ async def check_subscriptions(bot: Bot):
 
                     if user.profiles_data:
                         try:
-                            profiles = json.loads(user.profiles_data)
-                            for inbound_id_str, profile in profiles.items():
-                                email = profile.get("email")
-                                if not email:
-                                    continue
+                            profile = json.loads(user.profiles_data)
+                            email = profile.get("email")
+                            if email:
                                 try:
-                                    success = await delete_client_by_email(email, int(inbound_id_str))
+                                    success = await delete_client_by_email(email)
                                     if success:
-                                        logger.info(f"✅ Deleted expired profile {email} from inbound {inbound_id_str}")
+                                        logger.info(f"✅ Deleted expired client {email}")
                                     else:
-                                        logger.warning(f"⚠️ Failed to delete {email} from inbound {inbound_id_str}")
+                                        logger.warning(f"⚠️ Failed to delete {email}")
                                     deleted_any = True
                                 except Exception as e:
                                     logger.warning(f"⚠️ Deletion error for {email}: {e}")

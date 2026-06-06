@@ -1,8 +1,11 @@
 from config import config
+from functions import delete_client_by_email
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
+
+import asyncio
 import logging
 import json
 
@@ -151,44 +154,37 @@ async def fix_all_subscription_dates():
         return fixed_count
 
 async def delete_user(telegram_id: int) -> bool:
-    """Удаляет пользователя из базы данных и его профили из 3x-ui."""
+    """Удаляет пользователя из БД и его клиента из 3x-ui."""
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
-        if user:
-            # Удаляем все профили из 3x-ui
-            profiles_to_delete: list[tuple[str, int]] = []  # (email, inbound_id)
-
-            if user.profiles_data:
-                try:
-                    profiles = json.loads(user.profiles_data)
-                    for inbound_id_str, pdata in profiles.items():
-                        email = pdata.get("email")
-                        if email:
-                            profiles_to_delete.append((email, int(inbound_id_str)))
-                except Exception as e:
-                    logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
-
-            for email, inbound_id in profiles_to_delete:
-                try:
-                    from functions import delete_client_by_email
-                    import asyncio
-                    result = asyncio.get_event_loop().run_until_complete(
-                        delete_client_by_email(email, inbound_id)
-                    )
-                    if result:
-                        logger.info(f"✅ Deleted profile from 3x-ui for user {telegram_id} (inbound {inbound_id})")
-                    else:
-                        logger.warning(f"⚠️ Failed to delete profile from 3x-ui for user {telegram_id} (inbound {inbound_id})")
-                except Exception as e:
-                    logger.error(f"🛑 Error deleting profile from 3x-ui: {e}")
-
-            session.delete(user)
-            session.commit()
-            logger.info(f"✅ User {telegram_id} deleted from database")
-            return True
-        else:
+        if not user:
             logger.warning(f"⚠️ User {telegram_id} not found in database")
             return False
+
+        emails_to_delete: set = set()
+        if user.profiles_data:
+            try:
+                profile = json.loads(user.profiles_data)
+                email = profile.get("email")
+                if email:
+                    emails_to_delete.add(email)
+            except Exception as e:
+                logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
+
+        for email in emails_to_delete:
+            try:
+                result = await delete_client_by_email(email)
+                if result:
+                    logger.info(f"✅ Deleted 3x-ui client {email} for user {telegram_id}")
+                else:
+                    logger.warning(f"⚠️ Failed to delete 3x-ui client {email}")
+            except Exception as e:
+                logger.error(f"🛑 Error deleting 3x-ui client {email}: {e}")
+
+        session.delete(user)
+        session.commit()
+        logger.info(f"✅ User {telegram_id} deleted from database")
+        return True
 
 def validate_and_fix_subscription_date(subscription_end: datetime) -> datetime:
     """Проверяет и исправляет дату окончания подписки."""
