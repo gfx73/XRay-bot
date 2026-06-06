@@ -209,7 +209,7 @@ async def main():
         tribute_app = create_tribute_app(bot)
         server = uvicorn.Server(uvicorn.Config(
             tribute_app,
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=config.TRIBUTE_WEBHOOK_PORT,
             log_level="warning",
         ))
