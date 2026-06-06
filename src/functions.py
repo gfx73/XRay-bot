@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from config import config
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -479,13 +480,13 @@ async def get_user_stats(email: str):
 
 def generate_sub_url(sub_id: str) -> str:
     """Генерирует ссылку на подписку 3x-ui."""
+    sub_path = config.SUB_BASE_PATH.strip("/")
     if not config.SUBSCRIPTION_URL_BASE:
-        from urllib.parse import urlparse
         parsed = urlparse(config.XUI_API_URL)
         scheme = parsed.scheme or "http"
         host = parsed.hostname or "localhost"
-        return f"{scheme}://{host}:{config.XUI_SUB_PORT}/sub/{sub_id}"
-    return f"{config.SUBSCRIPTION_URL_BASE.rstrip('/')}:{config.XUI_SUB_PORT}/sub/{sub_id}"
+        return f"{scheme}://{host}:{config.XUI_SUB_PORT}/{sub_path}/{sub_id}"
+    return f"{config.SUBSCRIPTION_URL_BASE.rstrip('/')}:{config.XUI_SUB_PORT}/{sub_path}/{sub_id}"
 
 
 async def fetch_sub_configs(sub_url: str) -> list[str]:
@@ -500,8 +501,7 @@ async def fetch_sub_configs(sub_url: str) -> list[str]:
                     logger.error(f"🛑 fetch_sub_configs: status={resp.status} for {sub_url}")
                     return []
                 content = await resp.text()
-                decoded = base64.b64decode(content).decode("utf-8")
-                return [line for line in decoded.splitlines() if line.startswith("vless://")]
+                return [line for line in content.splitlines() if line.startswith("vless://")]
     except Exception as e:
         logger.error(f"🛑 fetch_sub_configs error: {e}")
         return []

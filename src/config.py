@@ -39,6 +39,7 @@ class Config(BaseModel):
         12: {"base_price": 1200, "discount_percent": 30}
     }
     SUBSCRIPTION_URL_BASE: str = os.getenv("SUBSCRIPTION_URL_BASE", "")
+    SUB_BASE_PATH: str = os.getenv("SUB_BASE_PATH", "sub")
 
     @field_validator('ADMINS', mode='before')
     def parse_admins(cls, value):
