@@ -27,7 +27,6 @@ from functions import (
 )
 from urllib.parse import unquote
 
-
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -38,6 +37,7 @@ TIER_LABELS = {
     "basic": "📦 Basic",
     "premium": "⭐ Premium",
 }
+
 
 class AdminStates(StatesGroup):
     ADD_TIME = State()
@@ -50,6 +50,7 @@ class AdminStates(StatesGroup):
     REMOVE_TIME_AMOUNT = State()
     SEND_MESSAGE_TARGET = State()
     DELETE_USER = State()
+
 
 def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
     if len(text) <= max_length:
@@ -199,6 +200,8 @@ async def start_cmd(message: Message, bot: Bot):
         await message.answer(
             f"Добро пожаловать в VPN бота `{(await bot.get_me()).full_name}`!\n"
             "Вам предоставлен **бесплатный** тестовый период на **3 дня**!",
+            "Узнайте больше о видах подписки в разделе ℹ️ Помощь!",
+            "А если коротко, то Premium вам нужен для обхода БС, когда не работает ничего кроме ВК, Max...",
             parse_mode='Markdown'
         )
         await asyncio.sleep(2)
@@ -260,8 +263,7 @@ def _build_renew_keyboard():
     def _add_tier(tier: str, tribute_url: str) -> None:
         if not has_tg and not tribute_url:
             return
-        label = "📦 Basic" if tier == "basic" else "⭐ Premium"
-        builder.button(text=f"─── {label} ───", callback_data="noop")
+        label = "Standard" if tier == "basic" else "Premium"
         if has_tg:
             for months in sorted(config.PRICES.keys()):
                 price = config.calculate_price(months, tier)
@@ -272,7 +274,7 @@ def _build_renew_keyboard():
                     callback_data=f"pay_{tier}_{months}",
                 )
         if tribute_url:
-            builder.button(text="💳 Оплатить через Tribute →", url=tribute_url)
+            builder.button(text=f"💳 Оплатить {label} через Tribute →", url=tribute_url)
 
     _add_tier("basic", tribute_basic_url)
     if has_premium:
@@ -357,7 +359,19 @@ async def stats_cmd(message: Message, bot: Bot):
 async def help_cmd(message: Message, bot: Bot):
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
-    text = "О боте:\n"
+    text = (
+        "О боте:\n "
+        "Самые современные технологии обходов.\n"
+        "Нет ограничений по траффику для стандартных тарифов.\n"
+        "Авторские мануалы по настройке в закрытом tg канале(доступ при покупке через tribute).\n"
+        "Поддержка в случае возникновения проблем. Своим продуктом я пользуюсь лично.\n"
+        "Be smart, be wise, be a snake.\n\n"
+        "О различиях подписок:\n"
+        "Стандартная подписка включает подключение до 5 устройств без лимитов по траффику.\n"
+        "Premium подписка предлагает конфигурацию для обхода белых списков. "
+        "Думаю многих бесит, что выйдя на улицу, пользоваться ничем кроме ВК и Яндекса невозможно. "
+        "Данная конфигурация создана именно для вас. Есть лишь одно ограничение: 50ГБ траффика в месяц."
+    )
     await message.answer(text, parse_mode='HTML', reply_markup=builder.as_markup())
 
 
@@ -370,7 +384,19 @@ async def help_msg(callback: CallbackQuery):
     await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
-    text = "О боте:\n"
+    text = (
+        "О боте:\n "
+        "Самые современные технологии обходов.\n"
+        "Нет ограничений по траффику для стандартных тарифов.\n"
+        "Авторские мануалы по настройке в закрытом tg канале(доступ при покупке через tribute).\n"
+        "Поддержка в случае возникновения проблем. Своим продуктом я пользуюсь лично.\n"
+        "Be smart, be wise, be a snake.\n\n"
+        "О различиях подписок:\n"
+        "Стандартная подписка включает подключение до 5 устройств без лимитов по траффику.\n"
+        "Premium подписка предлагает конфигурацию для обхода белых списков. "
+        "Думаю многих бесит, что выйдя на улицу, пользоваться ничем кроме ВК и Яндекса невозможно. "
+        "Данная конфигурация создана именно для вас. Есть лишь одно ограничение: 50ГБ траффика в месяц."
+    )
     await callback.message.edit_text(text, parse_mode='HTML', reply_markup=builder.as_markup())
 
 
@@ -761,10 +787,10 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
     try:
         months, days, hours, minutes = map(int, parts)
         total_seconds = (
-            months * 30 * 24 * 60 * 60 +
-            days * 24 * 60 * 60 +
-            hours * 60 * 60 +
-            minutes * 60
+                months * 30 * 24 * 60 * 60 +
+                days * 24 * 60 * 60 +
+                hours * 60 * 60 +
+                minutes * 60
         )
 
         with Session() as session:
@@ -828,10 +854,10 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
     try:
         months, days, hours, minutes = map(int, parts)
         total_seconds = (
-            months * 30 * 24 * 60 * 60 +
-            days * 24 * 60 * 60 +
-            hours * 60 * 60 +
-            minutes * 60
+                months * 30 * 24 * 60 * 60 +
+                days * 24 * 60 * 60 +
+                hours * 60 * 60 +
+                minutes * 60
         )
 
         with Session() as session:
