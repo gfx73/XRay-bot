@@ -26,6 +26,9 @@ class Config(BaseModel):
     BASIC_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
     PREMIUM_INBOUNDS: str = os.getenv("PREMIUM_INBOUNDS", "")
 
+    TRIAL_DAYS: int = Field(default=int(os.getenv("TRIAL_DAYS", "3")))
+    TRIAL_TIER: str = os.getenv("TRIAL_TIER", "basic")
+
     # Коэффициент цены Premium = цена Basic * PREMIUM_PRICE_MULTIPLIER
     PREMIUM_PRICE_MULTIPLIER: float = Field(
         default=float(os.getenv("PREMIUM_PRICE_MULTIPLIER", "1.5"))

@@ -1,3 +1,5 @@
+from config import config
+
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
@@ -49,14 +51,16 @@ async def get_user(telegram_id: int):
 
 async def create_user(telegram_id: int, full_name: str, username: str = None, is_admin: bool = False):
     with Session() as session:
-        subscription_end = validate_and_fix_subscription_date(datetime.utcnow() + timedelta(days=3))
+        subscription_end = validate_and_fix_subscription_date(
+            datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
+        )
         user = User(
             telegram_id=telegram_id,
             full_name=full_name,
             username=username,
             subscription_end=subscription_end,
             is_admin=is_admin,
-            subscription_tier="basic",
+            subscription_tier=config.TRIAL_TIER,
         )
         session.add(user)
         session.commit()
