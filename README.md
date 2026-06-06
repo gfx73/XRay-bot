@@ -76,12 +76,6 @@ source .venv/bin/activate
 python3 src/app.py
 ```
 
-**Для запуска веб-сервера тест-профилей (опционально):**
-
-```bash
-python3 src/temp_profile_server.py
-```
-
 ### Настройка переменных окружения
 
 #### Обязательные параметры
@@ -130,22 +124,6 @@ INBOUND_3_SNI=example.com
 INBOUND_3_PATH=/
 INBOUND_3_SECURITY=tls
 INBOUND_3_HOST=        # пусто = XUI_HOST
-```
-
-#### Временные тест-профили
-
-```bash
-# Формат такой же: id:protocol
-TEMP_INBOUND_CONFIGS=2:reality,4:xhttp
-
-# Параметры тест-инбаунда id=2
-INBOUND_2_PUBLIC_KEY=...
-INBOUND_2_SNI=example.com
-...
-
-TEMP_WEB_SERVER_PORT=8080
-TEMP_SSL_CERT_PATH=/path/to/fullchain.pem
-TEMP_SSL_KEY_PATH=/path/to/privkey.pem
 ```
 
 <details>
@@ -203,11 +181,7 @@ REALITY_SPIDER_X=/
 │   ├── database.py               # ORM-модели, migrate_database()
 │   ├── functions.py              # XUIAPI, create_profile(), генерация URL
 │   ├── handlers.py               # Обработчики команд и callback'ов
-│   ├── tribute_webhook.py        # FastAPI webhook-обработчик Tribute
-│   └── temp_profile_server.py    # FastAPI веб-сервер тест-профилей
-├── templates/
-│   ├── temp_profile.html
-│   └── error.html
+│   └── tribute_webhook.py        # FastAPI webhook-обработчик Tribute
 ├── docs/
 │   └── README.en_US.md
 ├── README.md

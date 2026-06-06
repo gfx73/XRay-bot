@@ -64,12 +64,6 @@ cp src\.env.example src\.env # use "/" instead of "\" on Linux
 python src\app.py # use python3 and "/" instead of "\" on Linux
 ```
 
-**To run the temporary profile web server (optional):**
-
-```bash
-python src\temp_profile_server.py # use python3 and "/" instead of "\" on Linux
-```
-
 ### Environment Variables Configuration
 
 Mandatory parameters in `.env`:
@@ -81,18 +75,6 @@ Mandatory parameters in `.env`:
 - `XUI_USERNAME` and `XUI_PASSWORD` - Panel credentials
 - `INBOUND_ID` - Inbound ID in the 3X-UI panel
 - Reality parameters (public key, fingerprint, SNI, etc.)
-
-**Optional parameters for temporary profiles:**
-
-- `TEMP_INBOUND_ID` - Inbound ID for temporary profiles (default: 2)
-- `TEMP_REALITY_PUBLIC_KEY` - Public key for temporary profiles
-- `TEMP_REALITY_FINGERPRINT` - Fingerprint for temporary profiles
-- `TEMP_REALITY_SNI` - SNI for temporary profiles
-- `TEMP_REALITY_SHORT_ID` - Short ID for temporary profiles
-- `TEMP_REALITY_SPIDER_X` - Spider X for temporary profiles
-- `TEMP_WEB_SERVER_PORT` - Web server port for temporary profiles (default: 8080)
-- `TEMP_SSL_CERT_PATH` - Path to SSL certificate (fullchain.pem)
-- `TEMP_SSL_KEY_PATH` - Path to SSL private key (privkey.pem)
 
 ## Bot Commands
 
@@ -130,11 +112,7 @@ Administrators have access to a special menu with functions:
 │   ├── config.py                 # Application configuration
 │   ├── database.py               # Database models and functions
 │   ├── functions.py              # Functions for 3X-UI API interaction
-│   ├── handlers.py               # Command and callback handlers
-│   └── temp_profile_server.py    # Temporary profile web server
-├── templates                     # Templates for temporary profiles
-│   ├── temp_profile.html         # Temporary profile page
-│   └── error.html                # Error page
+│   └── handlers.py               # Command and callback handlers
 ├── docs                          # Documentation in other languages
 │   └── README.en_US              # Documentation in English
 ├── users.db                      # SQLite database file
@@ -171,7 +149,6 @@ The main application file that:
 Loads and validates configuration using `Pydantic`. Contains:
 - 3X-UI panel connection settings
 - Reality protocol parameters
-- **Parameters for temporary profiles**
 - Subscription prices and discounts
 - Functions for cost calculation
 
@@ -205,14 +182,6 @@ Command and callback handlers:
 - Administrative functions
 - Profile management
 - **Handlers for new admin functions**
-
-#### 6. `temp_profile_server.py`
-
-Web server for temporary profiles:
-- FastAPI application
-- Creating 30-minute temporary profiles
-- Automatic deletion upon expiration
-- HTTPS support with SSL certificates
 
 ## Payment Processing
 

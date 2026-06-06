@@ -18,10 +18,6 @@ class Config(BaseModel):
     XUI_VERIFY_SSL: bool = Field(default=os.getenv("XUI_VERIFY_SSL", "True").lower() == "true")
     PAYMENT_TOKEN: str = os.getenv("PAYMENT_TOKEN", "")
 
-    TEMP_WEB_SERVER_PORT: int = Field(default=os.getenv("TEMP_WEB_SERVER_PORT", 8080))
-    TEMP_SSL_CERT_PATH: str = os.getenv("TEMP_SSL_CERT_PATH", "")
-    TEMP_SSL_KEY_PATH: str = os.getenv("TEMP_SSL_KEY_PATH", "")
-
     # ────────────────────────────────────────────────
     # Новая система тарифов
     # Формат: "id:protocol,id:protocol" — например "1:reality,3:xhttp"
@@ -34,9 +30,6 @@ class Config(BaseModel):
     PREMIUM_PRICE_MULTIPLIER: float = Field(
         default=float(os.getenv("PREMIUM_PRICE_MULTIPLIER", "1.5"))
     )
-
-    # Временные тест-инбаунды: "id:protocol,id:protocol"
-    TEMP_INBOUND_CONFIGS: str = os.getenv("TEMP_INBOUND_CONFIGS", "")
 
     # Настройки цен и скидок
     PRICES: Dict[int, Dict[str, int]] = {
@@ -52,12 +45,6 @@ class Config(BaseModel):
         if isinstance(value, str):
             return [int(admin) for admin in value.split(",") if admin.strip()]
         return value or []
-
-    @field_validator('TEMP_WEB_SERVER_PORT', mode='before')
-    def parse_temp_web_server_port(cls, value):
-        if isinstance(value, str):
-            return int(value)
-        return value or 8080
 
     # ────────────────────────────────────────────────
     # Tribute (опционально)
@@ -108,10 +95,6 @@ class Config(BaseModel):
         """
         raw = self.PREMIUM_INBOUNDS if tier == "premium" else self.BASIC_INBOUNDS
         return self._parse_inbound_configs_raw(raw)
-
-    def get_temp_inbound_configs(self) -> list[dict]:
-        """Возвращает список конфигов временных инбаундов."""
-        return self._parse_inbound_configs_raw(self.TEMP_INBOUND_CONFIGS)
 
     def calculate_price(self, months: int, tier: str = "basic") -> int:
         """Вычисляет итоговую стоимость с учётом скидки и тарифа."""
