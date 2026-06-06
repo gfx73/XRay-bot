@@ -13,6 +13,7 @@ class Config(BaseModel):
     XUI_SUB_PORT: str = os.getenv("XUI_SUB_PORT", "54321")
     XUI_USERNAME: str = os.getenv("XUI_USERNAME", "admin")
     XUI_PASSWORD: str = os.getenv("XUI_PASSWORD", "admin")
+    XUI_API_TOKEN: str = os.getenv("XUI_API_TOKEN", "")
     XUI_HOST: str = os.getenv("XUI_HOST", "your-server.com")
     XUI_SERVER_NAME: str = os.getenv("XUI_SERVER_NAME", "domain.com")
     XUI_VERIFY_SSL: bool = Field(default=os.getenv("XUI_VERIFY_SSL", "True").lower() == "true")

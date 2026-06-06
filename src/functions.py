@@ -31,50 +31,19 @@ def safe_json_loads(value, default=None):
 class XUIAPI:
     def __init__(self):
         self.session = None
-        self.cookie_jar = aiohttp.CookieJar(unsafe=True)
-        self.auth_cookies = None
 
     async def login(self):
-        """Аутентификация в 3x-UI API."""
-        try:
-            connector = aiohttp.TCPConnector(ssl=config.XUI_VERIFY_SSL)
-            self.session = aiohttp.ClientSession(
-                connector=connector,
-                cookie_jar=self.cookie_jar,
-                trust_env=True
-            )
-            auth_data = {
-                "username": config.XUI_USERNAME,
-                "password": config.XUI_PASSWORD
-            }
-            base_url = config.XUI_API_URL.rstrip('/')
-            login_url = f"{base_url}/login"
-            logger.info(f"ℹ️  Trying login to {login_url} with user: {config.XUI_USERNAME}")
-
-            async with self.session.post(login_url, data=auth_data) as resp:
-                if resp.status != 200:
-                    logger.error(f"🛑 Login failed with status: {resp.status}")
-                    return False
-                try:
-                    response = await resp.json()
-                    if response.get("success"):
-                        logger.info("✅ Login successful")
-                        self.auth_cookies = self.cookie_jar
-                        return True
-                    else:
-                        logger.error(f"🛑 Login failed: {response.get('msg')}")
-                        return False
-                except Exception:
-                    text = await resp.text()
-                    if "success" in text.lower():
-                        logger.warning("⚠️ Login successful (text response)")
-                        self.auth_cookies = self.cookie_jar
-                        return True
-                    logger.error(f"🛑 Login failed. Response text: {text[:100]}...")
-                    return False
-        except Exception as e:
-            logger.exception(f"🛑 Login error: {e}")
+        """Создаёт сессию с Bearer API-токеном (3x-ui v3.0.2+)."""
+        if not config.XUI_API_TOKEN:
+            logger.error("🛑 XUI_API_TOKEN is not set")
             return False
+        connector = aiohttp.TCPConnector(ssl=config.XUI_VERIFY_SSL)
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            headers={"Authorization": f"Bearer {config.XUI_API_TOKEN}"},
+        )
+        logger.info("✅ Session created with Bearer token")
+        return True
 
     async def get_inbound(self, inbound_id: int):
         """Получение данных инбаунда."""
