@@ -10,7 +10,7 @@ from aiogram.types import PreCheckoutQuery
 from handlers import setup_handlers
 from datetime import datetime, timedelta
 from functions import delete_client_by_email
-from database import Session, User, init_db, get_all_users, delete_user_profile
+from database import Session, User, init_db, get_all_users, delete_user_profile, validate_and_fix_subscription_date
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -145,8 +145,12 @@ async def update_admins_status():
                 new_admin = User(
                     telegram_id=admin_id,
                     full_name=f"Admin {admin_id}",
+                    username=None,
                     is_admin=True,
-                    subscription_end=datetime.now() + timedelta(days=365)
+                    subscription_end=validate_and_fix_subscription_date(
+                        datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
+                    ),
+                    subscription_tier=config.TRIAL_TIER,
                 )
                 session.add(new_admin)
         session.commit()
@@ -197,10 +201,8 @@ async def main():
     async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
         await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-    tasks = [
-        dp.start_polling(bot),
-        check_subscriptions(bot),
-    ]
+    server = None
+    other_tasks = [asyncio.create_task(check_subscriptions(bot))]
 
     if config.TRIBUTE_API_KEY:
         from tribute_webhook import create_tribute_app
@@ -211,24 +213,30 @@ async def main():
             port=config.TRIBUTE_WEBHOOK_PORT,
             log_level="warning",
         ))
-        tasks.append(server.serve())
+        other_tasks.append(asyncio.create_task(server.serve()))
         logger.info(f"ℹ️  Tribute webhook listening on port {config.TRIBUTE_WEBHOOK_PORT}")
     else:
         logger.info("ℹ️  TRIBUTE_API_KEY not set — Tribute webhook disabled")
 
     logger.info("ℹ️  Starting bot...")
     try:
-        await asyncio.gather(*tasks)
-    except Exception as e:
-        logger.error(f"❌ Bot start error: {e}")
-        return
+        await dp.start_polling(bot)
+    finally:
+        logger.info("👋 Shutting down...")
+        if server:
+            server.should_exit = True
+        for task in other_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*other_tasks, return_exceptions=True)
+        await bot.session.close()
+        logger.info("✅ Bot stopped")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Stopping bot...")
-        exit(0)
+        pass
     except Exception as e:
         logger.error(f"❌ Main loop error: {e}")
         exit(1)
