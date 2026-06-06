@@ -73,7 +73,9 @@ def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
 def _get_profiles(user) -> dict:
     """Возвращает {'standard': ..., 'wl': ...} или {}."""
     p = safe_json_loads(user.profiles_data, default=None)
-    if not p or not isinstance(p, dict) or "standard" not in p:
+    if not p or not isinstance(p, dict):
+        return {}
+    if "standard" not in p and "wl" not in p:
         return {}
     return p
 
@@ -82,22 +84,33 @@ def _has_profiles(user) -> bool:
     return bool(_get_profiles(user))
 
 
-async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str) -> dict:
-    """Создаёт VPN-клиентов для тарифа: standard для всех, wl — только для premium."""
-    expiry_time = get_safe_expiry_timestamp(subscription_end)
+def _is_subscription_active(user) -> bool:
+    now = datetime.utcnow()
+    if user.subscription_end and user.subscription_end > now:
+        return True
+    if getattr(user, 'premium_end', None) and user.premium_end > now:
+        return True
+    return False
+
+
+async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str, premium_end=None) -> dict:
+    """Создаёт VPN-клиентов: standard c expiry из subscription_end, wl — из premium_end."""
+    std_expiry = get_safe_expiry_timestamp(subscription_end)
+    prem_expiry = get_safe_expiry_timestamp(premium_end)
     profiles = {}
 
-    basic_cfgs = config.get_inbound_configs("basic")
-    standard_profile = await create_client(telegram_id, expiry_time, basic_cfgs)
-    if standard_profile:
-        profiles["standard"] = standard_profile
-    else:
-        logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
+    if std_expiry > 0:
+        basic_cfgs = config.get_inbound_configs("basic")
+        standard_profile = await create_client(telegram_id, std_expiry, basic_cfgs)
+        if standard_profile:
+            profiles["standard"] = standard_profile
+        else:
+            logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
 
-    if tier == "premium" and config.has_premium_inbounds():
+    if tier == "premium" and config.has_premium_inbounds() and prem_expiry > 0:
         premium_cfgs = config.get_inbound_configs("premium")
         wl_profile = await create_client(
-            telegram_id, expiry_time, premium_cfgs,
+            telegram_id, prem_expiry, premium_cfgs,
             email_suffix="_wl",
             traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
         )
@@ -115,8 +128,16 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int = None):
     if not user:
         return
 
-    status = "Активна" if user.subscription_end > datetime.utcnow() else "Истекла"
-    expire_date = user.subscription_end.strftime("%d-%m-%Y %H:%M") if status == "Активна" else status
+    now = datetime.utcnow()
+    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
+    std_active = bool(user.subscription_end and user.subscription_end > now)
+    status = "Активна" if std_active or prem_active else "Истекла"
+    if prem_active:
+        expire_date = user.premium_end.strftime("%d-%m-%Y %H:%M")
+    elif std_active:
+        expire_date = user.subscription_end.strftime("%d-%m-%Y %H:%M")
+    else:
+        expire_date = status
     tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
     tier_label = TIER_LABELS.get(tier, tier)
 
@@ -267,7 +288,7 @@ async def connect_cmd(message: Message, bot: Bot):
         await start_cmd(message, bot)
         return
 
-    if user.subscription_end < datetime.utcnow():
+    if not _is_subscription_active(user):
         await message.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
@@ -275,7 +296,10 @@ async def connect_cmd(message: Message, bot: Bot):
 
     if not _has_profiles(user):
         await message.answer("⚙️ Создаём ваш VPN профиль...")
-        new_profiles = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
+        new_profiles = await _create_client_for_tier(
+            user.telegram_id, user.subscription_end, tier,
+            premium_end=getattr(user, 'premium_end', None),
+        )
         if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
@@ -435,51 +459,74 @@ async def process_successful_payment(message: Message, bot: Bot):
             return
 
         now = datetime.utcnow()
-        action_type = "продлена" if user.subscription_end > now else "куплена"
+        if tier == "premium":
+            action_type = "продлена" if (getattr(user, 'premium_end', None) and user.premium_end > now) else "куплена"
+        else:
+            action_type = "продлена" if user.subscription_end > now else "куплена"
 
         success = await update_subscription(message.from_user.id, months, tier=tier)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
 
         if success:
             updated_user = await get_user(message.from_user.id)
-            expiry_time = get_safe_expiry_timestamp(updated_user.subscription_end)
+            std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
+            prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
             existing = _get_profiles(updated_user)
 
             profiles_to_save = {}
 
-            # Standard-клиент — всегда обновляем expiry или создаём
-            if "standard" in existing:
-                await update_client_expiry(existing["standard"]["email"], expiry_time)
-                profiles_to_save["standard"] = existing["standard"]
-            else:
-                basic_cfgs = config.get_inbound_configs("basic")
-                new_std = await create_client(message.from_user.id, expiry_time, basic_cfgs)
-                if new_std:
-                    profiles_to_save["standard"] = new_std
-
-            # WL-клиент — только для premium
-            if tier == "premium" and config.has_premium_inbounds():
+            if tier == "basic":
+                # Обновляем только standard; wl сохраняем без изменений (premium может быть активен)
+                if "standard" in existing:
+                    await update_client_expiry(existing["standard"]["email"], std_expiry)
+                    profiles_to_save["standard"] = existing["standard"]
+                else:
+                    basic_cfgs = config.get_inbound_configs("basic")
+                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
+                    if new_std:
+                        profiles_to_save["standard"] = new_std
                 if "wl" in existing:
-                    await update_client_expiry(existing["wl"]["email"], expiry_time)
+                    profiles_to_save["wl"] = existing["wl"]
+
+            elif tier == "premium" and config.has_premium_inbounds():
+                # standard — по subscription_end, wl — по premium_end (независимые сроки)
+                if "standard" in existing:
+                    await update_client_expiry(existing["standard"]["email"], std_expiry)
+                    profiles_to_save["standard"] = existing["standard"]
+                else:
+                    basic_cfgs = config.get_inbound_configs("basic")
+                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
+                    if new_std:
+                        profiles_to_save["standard"] = new_std
+                if "wl" in existing:
+                    await update_client_expiry(existing["wl"]["email"], prem_expiry)
                     profiles_to_save["wl"] = existing["wl"]
                 else:
                     premium_cfgs = config.get_inbound_configs("premium")
                     new_wl = await create_client(
-                        message.from_user.id, expiry_time, premium_cfgs,
+                        message.from_user.id, prem_expiry, premium_cfgs,
                         email_suffix="_wl",
                         traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
                     )
                     if new_wl:
                         profiles_to_save["wl"] = new_wl
-            elif "wl" in existing:
-                # Даунгрейд с premium — удаляем wl-клиента
-                await delete_client_by_email(existing["wl"]["email"])
+
+            else:
+                # premium без premium inbounds — только standard
+                if "standard" in existing:
+                    await update_client_expiry(existing["standard"]["email"], std_expiry)
+                    profiles_to_save["standard"] = existing["standard"]
+                else:
+                    basic_cfgs = config.get_inbound_configs("basic")
+                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
+                    if new_std:
+                        profiles_to_save["standard"] = new_std
 
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
                 if db_user:
                     db_user.profiles_data = json.dumps(profiles_to_save)
-                    db_user.subscription_tier = tier
+                    # subscription_tier уже обновлён в update_subscription
                     session.commit()
 
             await message.answer(
@@ -512,7 +559,7 @@ async def connect_profile(callback: CallbackQuery):
         await callback.answer("🛑 Ошибка профиля")
         return
 
-    if user.subscription_end < datetime.utcnow():
+    if not _is_subscription_active(user):
         await callback.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
@@ -520,7 +567,10 @@ async def connect_profile(callback: CallbackQuery):
 
     if not _has_profiles(user):
         await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
-        new_profiles = await _create_client_for_tier(user.telegram_id, user.subscription_end, tier)
+        new_profiles = await _create_client_for_tier(
+            user.telegram_id, user.subscription_end, tier,
+            premium_end=getattr(user, 'premium_end', None),
+        )
         if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
@@ -537,11 +587,13 @@ async def connect_profile(callback: CallbackQuery):
         await callback.message.answer("⚠️ У вас пока нет созданного профиля.")
         return
 
-    # Синхронизируем expiry в 3x-ui при каждом просмотре профиля
-    expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-    if expiry_time > 0:
-        for slot_profile in profiles.values():
-            await update_client_expiry(slot_profile["email"], expiry_time)
+    # Синхронизируем expiry в 3x-ui при каждом просмотре профиля — каждый слот по своей дате
+    std_expiry = get_safe_expiry_timestamp(user.subscription_end)
+    prem_expiry = get_safe_expiry_timestamp(getattr(user, 'premium_end', None))
+    if std_expiry > 0 and "standard" in profiles:
+        await update_client_expiry(profiles["standard"]["email"], std_expiry)
+    if prem_expiry > 0 and "wl" in profiles:
+        await update_client_expiry(profiles["wl"]["email"], prem_expiry)
 
     await _send_profile_message(callback.message, user, profiles, edit=True, delete_after=True)
 
@@ -752,14 +804,14 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
                 profiles = safe_json_loads(user.profiles_data, {})
                 if isinstance(profiles, dict) and "standard" in profiles:
                     expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                    for slot_profile in profiles.values():
-                        email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
-                        if email:
-                            try:
-                                await update_client_expiry(email, expiry_time)
-                                logger.info(f"✅ Updated expiry for {email} (admin add time)")
-                            except Exception as e:
-                                logger.error(f"🛑 Failed to update expiry for {email}: {e}")
+                    std_profile = profiles.get("standard", {})
+                    email = std_profile.get("email") if isinstance(std_profile, dict) else None
+                    if email:
+                        try:
+                            await update_client_expiry(email, expiry_time)
+                            logger.info(f"✅ Updated expiry for {email} (admin add time)")
+                        except Exception as e:
+                            logger.error(f"🛑 Failed to update expiry for {email}: {e}")
 
                 await message.answer(f"✅ Добавлено время пользователю {user_id}")
             else:
@@ -819,14 +871,14 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
                 profiles = safe_json_loads(user.profiles_data, {})
                 if isinstance(profiles, dict) and "standard" in profiles:
                     expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                    for slot_profile in profiles.values():
-                        email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
-                        if email:
-                            try:
-                                await update_client_expiry(email, expiry_time)
-                                logger.info(f"✅ Updated expiry for {email} (admin remove time)")
-                            except Exception as e:
-                                logger.error(f"🛑 Failed to update expiry for {email}: {e}")
+                    std_profile = profiles.get("standard", {})
+                    email = std_profile.get("email") if isinstance(std_profile, dict) else None
+                    if email:
+                        try:
+                            await update_client_expiry(email, expiry_time)
+                            logger.info(f"✅ Updated expiry for {email} (admin remove time)")
+                        except Exception as e:
+                            logger.error(f"🛑 Failed to update expiry for {email}: {e}")
 
                 await message.answer(f"✅ Удалено время у пользователя {user_id}")
             else:

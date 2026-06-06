@@ -11,7 +11,6 @@ from config import config
 from database import Session, User, get_user, create_user, update_subscription
 from functions import (
     create_client,
-    delete_client_by_email,
     update_client_expiry,
     get_safe_expiry_timestamp,
     safe_json_loads,
@@ -32,46 +31,67 @@ async def _sync_profiles(telegram_id: int, tier: str, bot: Bot) -> None:
     if not updated_user:
         return
 
-    expiry_time = get_safe_expiry_timestamp(updated_user.subscription_end)
+    std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
+    prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
+
     existing = safe_json_loads(updated_user.profiles_data, default={})
-    if not isinstance(existing, dict) or "standard" not in existing:
+    if not isinstance(existing, dict):
         existing = {}
 
     profiles_to_save = {}
 
-    # Standard-клиент (Reality, безлимит) — всегда присутствует
-    if "standard" in existing:
-        await update_client_expiry(existing["standard"]["email"], expiry_time)
-        profiles_to_save["standard"] = existing["standard"]
-    else:
-        basic_cfgs = config.get_inbound_configs("basic")
-        new_std = await create_client(telegram_id, expiry_time, basic_cfgs)
-        if new_std:
-            profiles_to_save["standard"] = new_std
-
-    # WL-клиент (xhttp/CDN, с лимитом) — только для premium
-    if tier == "premium" and config.has_premium_inbounds():
+    if tier == "basic":
+        # Обновляем только standard; wl сохраняем без изменений (premium может быть активен)
+        if "standard" in existing:
+            await update_client_expiry(existing["standard"]["email"], std_expiry)
+            profiles_to_save["standard"] = existing["standard"]
+        else:
+            basic_cfgs = config.get_inbound_configs("basic")
+            new_std = await create_client(telegram_id, std_expiry, basic_cfgs)
+            if new_std:
+                profiles_to_save["standard"] = new_std
         if "wl" in existing:
-            await update_client_expiry(existing["wl"]["email"], expiry_time)
+            profiles_to_save["wl"] = existing["wl"]
+
+    elif tier == "premium" and config.has_premium_inbounds():
+        # standard — по subscription_end, wl — по premium_end (независимые сроки)
+        if "standard" in existing:
+            await update_client_expiry(existing["standard"]["email"], std_expiry)
+            profiles_to_save["standard"] = existing["standard"]
+        else:
+            basic_cfgs = config.get_inbound_configs("basic")
+            new_std = await create_client(telegram_id, std_expiry, basic_cfgs)
+            if new_std:
+                profiles_to_save["standard"] = new_std
+        if "wl" in existing:
+            await update_client_expiry(existing["wl"]["email"], prem_expiry)
             profiles_to_save["wl"] = existing["wl"]
         else:
             premium_cfgs = config.get_inbound_configs("premium")
             new_wl = await create_client(
-                telegram_id, expiry_time, premium_cfgs,
+                telegram_id, prem_expiry, premium_cfgs,
                 email_suffix="_wl",
                 traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
             )
             if new_wl:
                 profiles_to_save["wl"] = new_wl
-    elif "wl" in existing:
-        # Даунгрейд с premium — удаляем wl-клиента
-        await delete_client_by_email(existing["wl"]["email"])
+
+    else:
+        # premium без premium inbounds — только standard
+        if "standard" in existing:
+            await update_client_expiry(existing["standard"]["email"], std_expiry)
+            profiles_to_save["standard"] = existing["standard"]
+        else:
+            basic_cfgs = config.get_inbound_configs("basic")
+            new_std = await create_client(telegram_id, std_expiry, basic_cfgs)
+            if new_std:
+                profiles_to_save["standard"] = new_std
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if db_user:
             db_user.profiles_data = json.dumps(profiles_to_save)
-            db_user.subscription_tier = tier
+            # subscription_tier уже обновлён в update_subscription
             session.commit()
 
 

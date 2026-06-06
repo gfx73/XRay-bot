@@ -1,7 +1,7 @@
 from config import config
 from functions import delete_client_by_email
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func, or_, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 
@@ -21,8 +21,10 @@ class User(Base):
     username = Column(String)
     registration_date = Column(DateTime, default=datetime.utcnow)
     subscription_end = Column(DateTime)
+    premium_end = Column(DateTime, nullable=True)          # отдельный срок для premium/wl
     is_admin = Column(Boolean, default=False)
     notified = Column(Boolean, default=False)
+    premium_notified = Column(Boolean, default=False)
     # ── Новые поля ──────────────────────────────────────────
     subscription_tier = Column(String, default="basic")   # "basic" | "premium"
     profiles_data = Column(Text, nullable=True)            # JSON: {inbound_id: profile_data}
@@ -77,30 +79,52 @@ async def delete_user_profile(telegram_id: int):
         if user:
             user.profiles_data = None
             user.notified = False
+            user.premium_notified = False
             session.commit()
             logger.info(f"✅ User profile deleted: {telegram_id}")
 
 async def update_subscription(telegram_id: int, months: int, tier: str = None):
     """Обновляет подписку с учётом текущего состояния.
 
-    Args:
-        tier: если передан — обновляет subscription_tier пользователя.
+    tier="basic"   → продлевает subscription_end, premium_end не трогает.
+    tier="premium" → продлевает premium_end, subscription_end не трогает.
     """
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
             now = datetime.utcnow()
-            user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-            if user.subscription_end > now:
-                user.subscription_end += timedelta(days=months * 30)
+            if tier == "premium":
+                # subscription_end считается от текущего subscription_end (если активен)
+                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+                if user.subscription_end > now:
+                    user.subscription_end += timedelta(days=months * 30)
+                else:
+                    user.subscription_end = now + timedelta(days=months * 30)
+                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+                # premium_end считается независимо — от текущего premium_end (если активен), иначе от now
+                current_prem = validate_and_fix_subscription_date(user.premium_end) if user.premium_end else now
+                if current_prem > now:
+                    user.premium_end = current_prem + timedelta(days=months * 30)
+                else:
+                    user.premium_end = now + timedelta(days=months * 30)
+                user.premium_end = validate_and_fix_subscription_date(user.premium_end)
+                user.notified = False
+                user.premium_notified = False
             else:
-                user.subscription_end = now + timedelta(days=months * 30)
-            user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-            user.notified = False
-            if tier is not None:
-                user.subscription_tier = tier
+                # Продлеваем только standard; premium_end не трогаем
+                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+                if user.subscription_end > now:
+                    user.subscription_end += timedelta(days=months * 30)
+                else:
+                    user.subscription_end = now + timedelta(days=months * 30)
+                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+                user.notified = False
+            # Derive tier from currently active subscriptions
+            has_active_premium = bool(user.premium_end and user.premium_end > now)
+            user.subscription_tier = "premium" if has_active_premium else "basic"
             session.commit()
-            logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, tier={tier}, new end: {user.subscription_end}")
+            logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, tier={tier}, "
+                        f"subscription_end={user.subscription_end}, premium_end={user.premium_end}")
             return True
         return False
 
@@ -108,10 +132,16 @@ async def get_all_users(with_subscription: bool = None):
     with Session() as session:
         query = session.query(User)
         if with_subscription is not None:
+            now = datetime.utcnow()
             if with_subscription:
-                query = query.filter(User.subscription_end > datetime.utcnow())
+                query = query.filter(
+                    or_(User.subscription_end > now, User.premium_end > now)
+                )
             else:
-                query = query.filter(User.subscription_end <= datetime.utcnow())
+                query = query.filter(
+                    User.subscription_end <= now,
+                    or_(User.premium_end == None, User.premium_end <= now),
+                )
         return query.all()
 
 async def create_static_profile(name: str, vless_url: str):
@@ -128,8 +158,11 @@ async def get_static_profiles():
 
 async def get_user_stats():
     with Session() as session:
+        now = datetime.utcnow()
         total = session.query(func.count(User.id)).scalar()
-        with_sub = session.query(func.count(User.id)).filter(User.subscription_end > datetime.utcnow()).scalar()
+        with_sub = session.query(func.count(User.id)).filter(
+            or_(User.subscription_end > now, User.premium_end > now)
+        ).scalar()
         without_sub = total - with_sub
         return total, with_sub, without_sub
 

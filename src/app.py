@@ -26,60 +26,112 @@ async def check_subscriptions(bot: Bot):
             users = await get_all_users()
 
             for user in users:
-                # Уведомление за 1 день до окончания
-                if (user.subscription_end - now < timedelta(days=1)
-                        and user.subscription_end >= now
-                        and not user.notified):
-                    try:
-                        await bot.send_message(
-                            user.telegram_id,
-                            "⚠️ Ваша подписка истекает через 24 часа! Продлите подписку, чтобы сохранить доступ."
-                        )
-                        with Session() as session:
-                            db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
-                            if db_user:
-                                db_user.notified = True
-                                session.commit()
-                    except Exception as e:
-                        logger.warning(f"⚠️ Notification error: {e}")
-
-                # Удаление истёкших профилей из 3x-ui
-                if user.subscription_end <= now:
-                    deleted_any = False
-
-                    if user.profiles_data:
-                        try:
-                            profiles = json.loads(user.profiles_data)
-                            if isinstance(profiles, dict) and "standard" in profiles:
-                                for slot_profile in profiles.values():
-                                    email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
-                                    if email:
-                                        try:
-                                            success = await delete_client_by_email(email)
-                                            if success:
-                                                logger.info(f"✅ Deleted expired client {email}")
-                                            else:
-                                                logger.warning(f"⚠️ Failed to delete {email}")
-                                            deleted_any = True
-                                        except Exception as e:
-                                            logger.warning(f"⚠️ Deletion error for {email}: {e}")
-                        except Exception as e:
-                            logger.warning(f"⚠️ Error parsing profiles_data for user {user.telegram_id}: {e}")
-
-                    if deleted_any:
-                        await delete_user_profile(user.telegram_id)
-                        try:
-                            await bot.send_message(
-                                user.telegram_id,
-                                "❌ Ваша подписка истекла! Профиль VPN был удален. Продлите подписку, чтобы создать новый."
-                            )
-                        except Exception as e:
-                            logger.warning(f"⚠️ Notification error: {e}")
+                try:
+                    await _check_user_subscription(bot, user, now)
+                except Exception as e:
+                    logger.warning(f"⚠️ Subscription check error for user {user.telegram_id}: {e}")
 
         except Exception as e:
             logger.warning(f"⚠️ Subscription check error: {e}")
 
         await asyncio.sleep(3600)
+
+
+async def _check_user_subscription(bot, user, now: datetime):
+    std_active = bool(user.subscription_end and user.subscription_end > now)
+    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
+
+    # Уведомление за 1 день до окончания standard
+    if std_active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
+        try:
+            await bot.send_message(
+                user.telegram_id,
+                "⚠️ Ваша подписка истекает через 24 часа! Продлите подписку, чтобы сохранить доступ."
+            )
+            with Session() as session:
+                db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
+                if db_user:
+                    db_user.notified = True
+                    session.commit()
+        except Exception as e:
+            logger.warning(f"⚠️ Notification error: {e}")
+
+    # Уведомление за 1 день до окончания premium
+    if prem_active and (user.premium_end - now < timedelta(days=1)) and not user.premium_notified:
+        try:
+            await bot.send_message(
+                user.telegram_id,
+                "⚠️ Ваша Premium-подписка истекает через 24 часа! Продлите подписку, чтобы сохранить доступ."
+            )
+            with Session() as session:
+                db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
+                if db_user:
+                    db_user.premium_notified = True
+                    session.commit()
+        except Exception as e:
+            logger.warning(f"⚠️ Notification error: {e}")
+
+    if not user.profiles_data:
+        return
+
+    try:
+        profiles = json.loads(user.profiles_data)
+    except Exception:
+        return
+
+    if not isinstance(profiles, dict):
+        return
+
+    changed = False
+
+    # Удаление истёкшего standard профиля
+    if not std_active and "standard" in profiles:
+        std_profile = profiles.get("standard", {})
+        email = std_profile.get("email") if isinstance(std_profile, dict) else None
+        if email:
+            try:
+                success = await delete_client_by_email(email)
+                if success:
+                    logger.info(f"✅ Deleted expired standard client {email}")
+                else:
+                    logger.warning(f"⚠️ Failed to delete {email}")
+            except Exception as e:
+                logger.warning(f"⚠️ Deletion error for {email}: {e}")
+        del profiles["standard"]
+        changed = True
+
+    # Удаление истёкшего wl (premium) профиля
+    if not prem_active and "wl" in profiles:
+        wl_profile = profiles.get("wl", {})
+        email = wl_profile.get("email") if isinstance(wl_profile, dict) else None
+        if email:
+            try:
+                success = await delete_client_by_email(email)
+                if success:
+                    logger.info(f"✅ Deleted expired wl client {email}")
+                else:
+                    logger.warning(f"⚠️ Failed to delete {email}")
+            except Exception as e:
+                logger.warning(f"⚠️ Deletion error for {email}: {e}")
+        del profiles["wl"]
+        changed = True
+
+    if changed:
+        with Session() as session:
+            db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
+            if db_user:
+                db_user.subscription_tier = "premium" if prem_active else "basic"
+                db_user.profiles_data = json.dumps(profiles) if profiles else None
+                session.commit()
+
+        if not std_active and not prem_active:
+            try:
+                await bot.send_message(
+                    user.telegram_id,
+                    "❌ Ваша подписка истекла! Профиль VPN был удален. Продлите подписку, чтобы создать новый."
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Notification error: {e}")
 
 async def update_admins_status():
     """Обновляет статус администраторов в базе данных."""
