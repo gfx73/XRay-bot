@@ -66,15 +66,91 @@ python src\app.py # use python3 and "/" instead of "\" on Linux
 
 ### Environment Variables Configuration
 
-Mandatory parameters in `.env`:
+#### Mandatory parameters
 
-- `BOT_TOKEN` - Your Telegram bot token from @BotFather
-- `PAYMENT_TOKEN` - Payment token from @BotFather
-- `ADMINS` - Administrator IDs, comma-separated
-- `XUI_API_URL` - 3X-UI panel URL (e.g., http://ip:54321)
-- `XUI_USERNAME` and `XUI_PASSWORD` - Panel credentials
-- `INBOUND_ID` - Inbound ID in the 3X-UI panel
-- Reality parameters (public key, fingerprint, SNI, etc.)
+| Variable | Description |
+|---|---|
+| `BOT_TOKEN` | Telegram bot token from @BotFather |
+| `ADMINS` | Administrator IDs, comma-separated |
+| `XUI_API_URL` | 3X-UI panel URL (e.g., `http://ip:54321`) |
+| `XUI_HOST` | Server IP or domain |
+| `XUI_API_TOKEN` | Bearer API token from 3X-UI (Settings → API Keys) |
+
+#### Payment (at least one required)
+
+| Variable | Description |
+|---|---|
+| `PAYMENT_TOKEN` | Telegram payment token from @BotFather (not needed if using Tribute only) |
+
+#### Tier configuration
+
+Format: `"id:protocol,id:protocol"`, where `protocol` is `reality` or `xhttp`.
+
+```bash
+# Basic tier — Reality only
+BASIC_INBOUNDS=1:reality
+
+# Basic with two servers
+BASIC_INBOUNDS=1:reality,2:reality
+
+# Premium — Reality + xhttp
+PREMIUM_INBOUNDS=1:reality,3:xhttp
+
+# Premium price = Basic price × multiplier (1.5 = +50%)
+PREMIUM_PRICE_MULTIPLIER=1.5
+
+# Traffic limit for premium in GB (0 = unlimited)
+PREMIUM_TRAFFIC_LIMIT_GB=100
+
+# Trial period settings
+TRIAL_DAYS=3
+TRIAL_TIER=basic
+```
+
+#### Per-inbound parameters (`INBOUND_{ID}_*`)
+
+```bash
+# Reality inbound (id=1)
+INBOUND_1_PUBLIC_KEY=...
+INBOUND_1_FINGERPRINT=chrome
+INBOUND_1_SNI=example.com
+INBOUND_1_SHORT_ID=...
+INBOUND_1_SPIDER_X=/
+
+# xhttp inbound (id=3)
+INBOUND_3_SNI=example.com
+INBOUND_3_PATH=/
+INBOUND_3_SECURITY=tls
+INBOUND_3_HOST=        # empty = XUI_HOST
+```
+
+#### Optional / advanced parameters
+
+| Variable | Default | Description |
+|---|---|---|
+| `XUI_BASE_PATH` | `/panel` | Base path for 3X-UI API endpoints |
+| `XUI_SUB_PORT` | `54321` | Port for the subscription endpoint (`/sub/`) |
+| `XUI_SERVER_NAME` | — | Server domain name for display |
+| `XUI_VERIFY_SSL` | `True` | Verify SSL certificates (`True`/`False`) |
+| `SUBSCRIPTION_URL_BASE` | — | Custom subscription base URL (auto-detected if empty) |
+
+#### Tribute (optional — second payment method)
+
+[Tribute](https://tribute.tg) supports foreign cards, USDT/TON/BTC, and auto-renewal. Both payment methods work simultaneously.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRIBUTE_API_KEY` | — | API key from Tribute Dashboard (Settings → API Keys) |
+| `TRIBUTE_WEBHOOK_PORT` | `8081` | Port for the Tribute webhook server |
+| `TRIBUTE_BASIC_PLAN_NAME` | `Basic` | Exact name of the Basic plan in Tribute |
+| `TRIBUTE_PREMIUM_PLAN_NAME` | `Premium` | Exact name of the Premium plan in Tribute |
+| `TRIBUTE_BASIC_URL` | — | Share link for the Basic plan payment page (Dashboard → Share). If not set, Tribute button won't appear |
+| `TRIBUTE_PREMIUM_URL` | — | Same for Premium plan |
+
+Webhook URL to register in Tribute Dashboard:
+```
+https://your-domain.com:8081/tribute/webhook
+```
 
 ## Bot Commands
 
@@ -106,18 +182,18 @@ Administrators have access to a special menu with functions:
 
 ```
 ./
-├── src
-│   ├── .env.example              # Example configuration file
-│   ├── app.py                    # Main application file
-│   ├── config.py                 # Application configuration
-│   ├── database.py               # Database models and functions
-│   ├── functions.py              # Functions for 3X-UI API interaction
-│   └── handlers.py               # Command and callback handlers
-├── docs                          # Documentation in other languages
-│   └── README.en_US              # Documentation in English
-├── users.db                      # SQLite database file
-├── README.md                     # Documentation in Russian
-└── requirements.txt              # Project dependencies
+├── src/
+│   ├── .env.example              # Example configuration
+│   ├── app.py                    # Entry point, background tasks
+│   ├── config.py                 # Configuration (Pydantic), get_inbound_configs()
+│   ├── database.py               # ORM models, migrate_database()
+│   ├── functions.py              # XUIAPI, create_profile(), URL generation
+│   ├── handlers.py               # Command and callback handlers
+│   └── tribute_webhook.py        # FastAPI webhook handler for Tribute
+├── docs/
+│   └── README.en_US.md
+├── README.md
+└── requirements.txt
 ```
 
 ### Database
@@ -127,9 +203,10 @@ The project uses `SQLite` with `SQLAlchemy ORM`. Main tables:
 1. **`users`** - User information:
    - `telegram_id` - User's Telegram ID
    - `subscription_end` - Subscription end date
-   - `vless_profile_data` - VPN profile data in JSON
+   - `subscription_tier` - Tier: `basic` or `premium`
+   - `profiles_data` - JSON: `{"inbound_id": {...profile...}, ...}`
    - `is_admin` - Administrator flag
-2. **`static_profiles`** - Static VPN profiles:
+2. **`static_profiles`** - Static VPN profiles without a user binding:
    - `name` - Profile name
    - `vless_url` - VLESS URL
 

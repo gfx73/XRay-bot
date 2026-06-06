@@ -83,11 +83,16 @@ python3 src/app.py
 | Переменная | Описание |
 |---|---|
 | `BOT_TOKEN` | Токен Telegram-бота от @BotFather |
-| `PAYMENT_TOKEN` | Платёжный токен от @BotFather |
 | `ADMINS` | ID администраторов через запятую |
 | `XUI_API_URL` | URL панели 3X-UI (например: `http://ip:54321`) |
 | `XUI_HOST` | IP или домен сервера |
-| `XUI_USERNAME` / `XUI_PASSWORD` | Учётные данные панели |
+| `XUI_API_TOKEN` | Bearer API-токен 3X-UI (Settings → API Keys) |
+
+#### Оплата (хотя бы один способ)
+
+| Переменная | Описание |
+|---|---|
+| `PAYMENT_TOKEN` | Платёжный токен от @BotFather (не нужен при использовании только Tribute) |
 
 #### Конфигурация тарифов
 
@@ -125,22 +130,6 @@ INBOUND_3_PATH=/
 INBOUND_3_SECURITY=tls
 INBOUND_3_HOST=        # пусто = XUI_HOST
 ```
-
-<details>
-<summary>Устаревшие переменные (backwards-compat)</summary>
-
-Если `BASIC_INBOUNDS` не задан, бот использует старые переменные как fallback:
-
-```bash
-INBOUND_ID=1
-REALITY_PUBLIC_KEY=...
-REALITY_FINGERPRINT=chrome
-REALITY_SNI=example.com
-REALITY_SHORT_ID=...
-REALITY_SPIDER_X=/
-```
-
-</details>
 
 ## Команды бота
 
