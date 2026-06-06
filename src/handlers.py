@@ -19,7 +19,7 @@ from database import (
 )
 from functions import (
     create_client,
-    delete_client_by_email, generate_vless_url, generate_vless_url_v2,
+    delete_client_by_email, fetch_sub_configs,
     get_user_stats, create_static_client, get_global_stats,
     get_online_users, generate_sub_url, update_client_expiry,
     get_safe_expiry_timestamp, force_update_profile_expiry,
@@ -602,11 +602,6 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     """Отправляет сообщение с QR-кодом и ссылками подключения.
     profiles — {'standard': {...}, 'wl': {...}}
     """
-    slot_cfg_maps = {
-        "standard": {str(cfg["id"]): cfg for cfg in config.get_inbound_configs("basic")},
-        "wl": {str(cfg["id"]): cfg for cfg in config.get_inbound_configs("premium")},
-    }
-
     all_vless_lines = []
     builder = InlineKeyboardBuilder()
 
@@ -615,28 +610,19 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
         if not profile:
             continue
         sub_id = profile.get("sub_id")
-        sub_url = generate_sub_url(sub_id) if sub_id else ""
-        inbound_cfgs_map = slot_cfg_maps.get(slot, {})
+        if not sub_id:
+            continue
+        sub_url = generate_sub_url(sub_id)
+        full_sub_url = sub_url if sub_url.startswith(("http://", "https://")) else "https://" + sub_url
 
-        slot_lines = []
-        for iid in profile.get("inbound_ids", []):
-            iid_str = str(iid)
-            inbound_cfg = inbound_cfgs_map.get(iid_str)
-            meta = profile.get("inbounds", {}).get(iid_str, {})
-            port = meta.get("port")
-            remark = meta.get("remark", "")
-            client_uuid = profile.get("uuid", "")
-            if not (inbound_cfg and port and client_uuid):
-                continue
-            vless_url = generate_vless_url_v2(inbound_cfg, client_uuid, port, remark)
-            label = "🔒 Reality" if inbound_cfg.get("protocol") == "reality" else "⚡ xhttp"
-            slot_lines.append(f"{label}:\n`{vless_url}`")
+        vless_urls = await fetch_sub_configs(sub_url)
+        if vless_urls:
+            slot_label = "🔒 Reality" if slot == "standard" else "⚡ Whitelist"
+            for url in vless_urls:
+                all_vless_lines.append(f"{slot_label}:\n`{url}`")
 
-        all_vless_lines.extend(slot_lines)
-
-        if sub_url:
-            btn_text = "🔒 Подключиться (Reality)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
-            builder.button(text=btn_text, url="https://" + sub_url)
+        btn_text = "🔒 Подключиться (Reality)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
+        builder.button(text=btn_text, url=full_sub_url)
 
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
     builder.adjust(1)
@@ -658,7 +644,8 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     standard = profiles.get("standard", {})
     std_sub_id = standard.get("sub_id") if standard else None
     if std_sub_id:
-        qr_data = "https://" + generate_sub_url(std_sub_id)
+        std_sub_url = generate_sub_url(std_sub_id)
+        qr_data = std_sub_url if std_sub_url.startswith(("http://", "https://")) else "https://" + std_sub_url
     elif all_vless_lines:
         try:
             qr_data = all_vless_lines[0].split("`")[1]
@@ -1014,9 +1001,7 @@ async def process_static_profile_name(message: Message, state: FSMContext):
     profile_data = await create_static_client(profile_name)
 
     if profile_data:
-        vless_url = generate_vless_url(profile_data)
-        sub_id = profile_data.get("sub_id")
-        sub_url = generate_sub_url(sub_id) if sub_id else vless_url
+        sub_url = profile_data["sub_url"]
 
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
         qr.add_data(sub_url)

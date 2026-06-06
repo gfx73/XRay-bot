@@ -11,19 +11,12 @@ class Config(BaseModel):
     XUI_API_URL: str = os.getenv("XUI_API_URL", "http://localhost:54321")
     XUI_BASE_PATH: str = os.getenv("XUI_BASE_PATH", "/panel")
     XUI_SUB_PORT: str = os.getenv("XUI_SUB_PORT", "54321")
-    XUI_USERNAME: str = os.getenv("XUI_USERNAME", "admin")
-    XUI_PASSWORD: str = os.getenv("XUI_PASSWORD", "admin")
     XUI_API_TOKEN: str = os.getenv("XUI_API_TOKEN", "")
-    XUI_HOST: str = os.getenv("XUI_HOST", "your-server.com")
-    XUI_SERVER_NAME: str = os.getenv("XUI_SERVER_NAME", "domain.com")
     XUI_VERIFY_SSL: bool = Field(default=os.getenv("XUI_VERIFY_SSL", "True").lower() == "true")
     PAYMENT_TOKEN: str = os.getenv("PAYMENT_TOKEN", "")
 
-    # ────────────────────────────────────────────────
-    # Новая система тарифов
-    # Формат: "id:protocol,id:protocol" — например "1:reality,3:xhttp"
-    # Параметры каждого инбаунда задаются через INBOUND_{ID}_*
-    # ────────────────────────────────────────────────
+    # Тарифы: ID инбаундов через запятую — например "1" или "1,3"
+    # Протокол берётся из панели, VLESS-ссылки — из /sub/{sub_id}
     BASIC_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
     PREMIUM_INBOUNDS: str = os.getenv("PREMIUM_INBOUNDS", "")
 
@@ -71,35 +64,18 @@ class Config(BaseModel):
         return value or 8081
 
     def _parse_inbound_configs_raw(self, raw: str) -> list[dict]:
-        """Парсит строку 'id:protocol,id:protocol' и подтягивает INBOUND_{ID}_* из env."""
+        """Парсит строку ID инбаундов через запятую: '1' или '1,3'."""
         result = []
         if not raw:
             return result
         for part in raw.split(","):
             part = part.strip()
-            if ":" not in part:
-                continue
-            inbound_id_str, protocol = part.split(":", 1)
-            inbound_id = int(inbound_id_str.strip())
-            protocol = protocol.strip()
-            params: dict = {"id": inbound_id, "protocol": protocol}
-            prefix = f"INBOUND_{inbound_id}_"
-            for key, val in os.environ.items():
-                if key.startswith(prefix):
-                    param_name = key[len(prefix):].lower()
-                    params[param_name] = val
-            result.append(params)
+            if part.isdigit():
+                result.append({"id": int(part)})
         return result
 
     def get_inbound_configs(self, tier: str) -> list[dict]:
-        """
-        Возвращает список конфигов инбаундов для заданного тарифа.
-
-        Пример возвращаемого элемента для Reality:
-          {"id": 1, "protocol": "reality", "public_key": "...", "sni": "...", ...}
-        Для xhttp:
-          {"id": 3, "protocol": "xhttp", "sni": "...", "path": "/", "security": "tls", ...}
-        """
+        """Возвращает список инбаундов для тарифа: [{"id": int, "protocol": str}, ...]."""
         raw = self.PREMIUM_INBOUNDS if tier == "premium" else self.BASIC_INBOUNDS
         return self._parse_inbound_configs_raw(raw)
 

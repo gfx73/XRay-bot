@@ -73,7 +73,6 @@ python src\app.py # use python3 and "/" instead of "\" on Linux
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `ADMINS` | Administrator IDs, comma-separated |
 | `XUI_API_URL` | 3X-UI panel URL (e.g., `http://ip:54321`) |
-| `XUI_HOST` | Server IP or domain |
 | `XUI_API_TOKEN` | Bearer API token from 3X-UI (Settings → API Keys) |
 
 #### Payment (at least one required)
@@ -84,17 +83,19 @@ python src\app.py # use python3 and "/" instead of "\" on Linux
 
 #### Tier configuration
 
-Format: `"id:protocol,id:protocol"`, where `protocol` is `reality` or `xhttp`.
+Specify inbound IDs from the 3x-ui panel. Protocol is detected automatically.
+
+**Where to find the ID:** 3x-ui panel → Inbounds → click **Edit** on the inbound → the ID is in the URL: `.../panel/#/inbounds/edit/**3**`
 
 ```bash
-# Basic tier — Reality only
-BASIC_INBOUNDS=1:reality
+# Basic tier — one inbound
+BASIC_INBOUNDS=1
 
 # Basic with two servers
-BASIC_INBOUNDS=1:reality,2:reality
+BASIC_INBOUNDS=1,2
 
-# Premium — Reality + xhttp
-PREMIUM_INBOUNDS=1:reality,3:xhttp
+# Premium — adds a second inbound on top of basic
+PREMIUM_INBOUNDS=3
 
 # Premium price = Basic price × multiplier (1.5 = +50%)
 PREMIUM_PRICE_MULTIPLIER=1.5
@@ -107,32 +108,14 @@ TRIAL_DAYS=3
 TRIAL_TIER=basic
 ```
 
-#### Per-inbound parameters (`INBOUND_{ID}_*`)
-
-```bash
-# Reality inbound (id=1)
-INBOUND_1_PUBLIC_KEY=...
-INBOUND_1_FINGERPRINT=chrome
-INBOUND_1_SNI=example.com
-INBOUND_1_SHORT_ID=...
-INBOUND_1_SPIDER_X=/
-
-# xhttp inbound (id=3)
-INBOUND_3_SNI=example.com
-INBOUND_3_PATH=/
-INBOUND_3_SECURITY=tls
-INBOUND_3_HOST=        # empty = XUI_HOST
-```
-
 #### Optional / advanced parameters
 
 | Variable | Default | Description |
 |---|---|---|
 | `XUI_BASE_PATH` | `/panel` | Base path for 3X-UI API endpoints |
 | `XUI_SUB_PORT` | `54321` | Port for the subscription endpoint (`/sub/`) |
-| `XUI_SERVER_NAME` | — | Server domain name for display |
 | `XUI_VERIFY_SSL` | `True` | Verify SSL certificates (`True`/`False`) |
-| `SUBSCRIPTION_URL_BASE` | — | Custom subscription base URL (auto-detected if empty) |
+| `SUBSCRIPTION_URL_BASE` | — | Custom subscription base URL (auto-detected from `XUI_API_URL` if empty) |
 
 #### Tribute (optional — second payment method)
 

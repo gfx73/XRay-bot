@@ -1,4 +1,5 @@
 import aiohttp
+import base64
 import uuid
 import json
 import logging
@@ -104,23 +105,22 @@ class XUIAPI:
             logger.error(f"🚨 Invalid expiry time ({expiry_time}), setting to 0")
             expiry_ms = 0
 
-        # Определяем flow из первого Reality-инбаунда
+        # Определяем flow из первого Reality-инбаунда (протокол берём из панели)
         flow = ""
         for cfg in inbound_cfgs:
-            if cfg.get("protocol") == "reality":
-                inbound = await self.get_inbound(cfg["id"])
-                if inbound:
-                    try:
-                        settings = json.loads(inbound.get("settings", "{}"))
-                        clients = settings.get("clients", [])
-                        if clients:
-                            flow = clients[0].get("flow", "")
-                        if not flow:
-                            stream = json.loads(inbound.get("streamSettings", "{}"))
-                            if stream.get("realitySettings"):
-                                flow = "xtls-rprx-vision"
-                    except Exception:
-                        flow = "xtls-rprx-vision"
+            inbound = await self.get_inbound(cfg["id"])
+            if inbound and inbound.get("protocol") == "reality":
+                try:
+                    settings = json.loads(inbound.get("settings", "{}"))
+                    clients = settings.get("clients", [])
+                    if clients:
+                        flow = clients[0].get("flow", "")
+                    if not flow:
+                        stream = json.loads(inbound.get("streamSettings", "{}"))
+                        if stream.get("realitySettings"):
+                            flow = "xtls-rprx-vision"
+                except Exception:
+                    flow = "xtls-rprx-vision"
                 break
 
         payload = {
@@ -240,33 +240,9 @@ class XUIAPI:
             logger.exception(f"🛑 Create static client error: {e}")
             return None
 
-        # Строим profile_data совместимый с generate_vless_url (старый формат)
-        profile_data = {
-            "client_id": client_id,
-            "email": profile_name,
-            "port": inbound.get("port"),
-            "remark": inbound.get("remark", ""),
-            "sub_id": sub_id,
-            "inbound_id": inbound_id,
-        }
-        if protocol == "reality":
-            profile_data.update({
-                "security": "reality",
-                "sni": inbound_cfg.get("sni", ""),
-                "pbk": inbound_cfg.get("public_key", ""),
-                "fp": inbound_cfg.get("fingerprint", ""),
-                "sid": inbound_cfg.get("short_id", ""),
-                "spx": inbound_cfg.get("spider_x", ""),
-            })
-        else:
-            profile_data.update({
-                "security": inbound_cfg.get("security", "tls"),
-                "protocol_type": protocol,
-                "path": inbound_cfg.get("path", "/"),
-                "host": inbound_cfg.get("host", config.XUI_HOST),
-                "sni": inbound_cfg.get("sni", config.XUI_HOST),
-            })
-        return profile_data
+        sub_url = generate_sub_url(sub_id)
+        logger.info(f"✅ Static client created: {profile_name}, sub_url={sub_url}")
+        return {"sub_id": sub_id, "sub_url": sub_url}
 
     # ────────────────────────────────────────────────────────
     # Управление клиентами (v3.2.8 unified API)
@@ -512,67 +488,23 @@ def generate_sub_url(sub_id: str) -> str:
     return f"{config.SUBSCRIPTION_URL_BASE.rstrip('/')}:{config.XUI_SUB_PORT}/sub/{sub_id}"
 
 
-def generate_vless_url(profile_data: dict) -> str:
-    """Генерирует VLESS URL из старого формата profile_data (статические профили)."""
-    remark = profile_data.get('remark', '')
-    email = profile_data.get('email', '')
-    fragment = f"{remark}-{email}" if remark else email
-    security = profile_data.get('security', 'reality')
-    client_id = profile_data.get('client_id', '')
-    port = profile_data.get('port', 443)
-
-    if security == 'reality':
-        pbk = profile_data.get('pbk', '')
-        fp = profile_data.get('fp', '')
-        sni = profile_data.get('sni', '')
-        sid = profile_data.get('sid', '')
-        spx = profile_data.get('spx', '')
-        return (
-            f"vless://{client_id}@{config.XUI_HOST}:{port}"
-            f"?type=tcp&security=reality"
-            f"&pbk={pbk}&fp={fp}&sni={sni}&sid={sid}&spx={spx}"
-            f"#{fragment}"
-        )
-    else:
-        path = profile_data.get('path', '/')
-        host = profile_data.get('host', config.XUI_HOST)
-        sni = profile_data.get('sni', config.XUI_HOST)
-        return (
-            f"vless://{client_id}@{config.XUI_HOST}:{port}"
-            f"?type=xhttp&security={security}"
-            f"&path={path}&host={host}&sni={sni}"
-            f"#{fragment}"
-        )
-
-
-def generate_vless_url_v2(inbound_cfg: dict, client_uuid: str, port: int, remark: str) -> str:
-    """Генерирует VLESS URL из унифицированного профиля (v3.2.8)."""
-    host = config.XUI_HOST
-    protocol = inbound_cfg.get("protocol", "reality")
-
-    if protocol == "reality":
-        pbk = inbound_cfg.get("public_key", "")
-        fp = inbound_cfg.get("fingerprint", "")
-        sni = inbound_cfg.get("sni", "")
-        sid = inbound_cfg.get("short_id", "")
-        spx = inbound_cfg.get("spider_x", "")
-        return (
-            f"vless://{client_uuid}@{host}:{port}"
-            f"?type=tcp&security=reality"
-            f"&pbk={pbk}&fp={fp}&sni={sni}&sid={sid}&spx={spx}"
-            f"#{remark}"
-        )
-    else:
-        security = inbound_cfg.get("security", "tls")
-        path = inbound_cfg.get("path", "/")
-        sni = inbound_cfg.get("sni", host)
-        h = inbound_cfg.get("host", host) or host
-        return (
-            f"vless://{client_uuid}@{host}:{port}"
-            f"?type=xhttp&security={security}"
-            f"&path={path}&host={h}&sni={sni}"
-            f"#{remark}"
-        )
+async def fetch_sub_configs(sub_url: str) -> list[str]:
+    """Получает список vless:// ссылок из /sub/{sub_id} эндпоинта 3x-ui."""
+    if not sub_url.startswith(("http://", "https://")):
+        sub_url = "https://" + sub_url
+    connector = aiohttp.TCPConnector(ssl=config.XUI_VERIFY_SSL)
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(sub_url) as resp:
+                if resp.status != 200:
+                    logger.error(f"🛑 fetch_sub_configs: status={resp.status} for {sub_url}")
+                    return []
+                content = await resp.text()
+                decoded = base64.b64decode(content).decode("utf-8")
+                return [line for line in decoded.splitlines() if line.startswith("vless://")]
+    except Exception as e:
+        logger.error(f"🛑 fetch_sub_configs error: {e}")
+        return []
 
 
 # ──────────────────────────────────────────────────────────────

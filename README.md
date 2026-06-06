@@ -29,11 +29,11 @@ Telegram бот для продажи и управления VPN-подписк
 Каждый тариф — это набор инбаундов, заданных в `.env`. Один пользователь получает профиль в **каждом** инбаунде своего тарифа. Все профили объединяются в одну подписку по `sub_id`: пользователь сканирует **один QR-код** и получает все серверы сразу.
 
 ```
-Basic:   1:reality              → один Reality-сервер
-Premium: 1:reality,3:xhttp     → Reality + xhttp одновременно
+Basic:   BASIC_INBOUNDS=1        → один инбаунд
+Premium: PREMIUM_INBOUNDS=3      → добавляет второй поверх базового
 ```
 
-Добавить серверы или сменить протокол — только правка `.env` и перезапуск бота. Код менять не нужно.
+Протокол каждого инбаунда определяется автоматически из панели 3x-ui. Добавить серверы — только правка `.env` и перезапуск бота.
 
 ## Установка и настройка
 
@@ -85,7 +85,6 @@ python3 src/app.py
 | `BOT_TOKEN` | Токен Telegram-бота от @BotFather |
 | `ADMINS` | ID администраторов через запятую |
 | `XUI_API_URL` | URL панели 3X-UI (например: `http://ip:54321`) |
-| `XUI_HOST` | IP или домен сервера |
 | `XUI_API_TOKEN` | Bearer API-токен 3X-UI (Settings → API Keys) |
 
 #### Оплата (хотя бы один способ)
@@ -96,40 +95,24 @@ python3 src/app.py
 
 #### Конфигурация тарифов
 
-Формат: `"id:protocol,id:protocol"`, где `protocol` — `reality` или `xhttp`.
+Укажите ID инбаундов из панели 3x-ui. Протокол определяется автоматически.
+
+**Где найти ID:** панель 3x-ui → «Inbounds» → нажмите «Edit» на нужном инбаунде → ID виден в URL: `.../panel/#/inbounds/edit/**3**`
 
 ```bash
-# Базовый тариф — только Reality
-BASIC_INBOUNDS=1:reality
+# Базовый тариф — один инбаунд
+BASIC_INBOUNDS=1
 
 # Базовый с двумя серверами
-BASIC_INBOUNDS=1:reality,2:reality
+BASIC_INBOUNDS=1,2
 
-# Премиум — Reality + xhttp
-PREMIUM_INBOUNDS=1:reality,3:xhttp
+# Премиум — добавляет второй инбаунд поверх базового
+PREMIUM_INBOUNDS=3
 
 # Цена Premium = цена Basic × коэффициент (1.5 = +50%)
 PREMIUM_PRICE_MULTIPLIER=1.5
 ```
 
-#### Параметры каждого инбаунда
-
-Задаются по схеме `INBOUND_{ID}_*`:
-
-```bash
-# Reality инбаунд (id=1)
-INBOUND_1_PUBLIC_KEY=...
-INBOUND_1_FINGERPRINT=chrome
-INBOUND_1_SNI=example.com
-INBOUND_1_SHORT_ID=...
-INBOUND_1_SPIDER_X=/
-
-# xhttp инбаунд (id=3)
-INBOUND_3_SNI=example.com
-INBOUND_3_PATH=/
-INBOUND_3_SECURITY=tls
-INBOUND_3_HOST=        # пусто = XUI_HOST
-```
 
 ## Команды бота
 
@@ -273,9 +256,9 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 
 | Проблема | Решение |
 |---|---|
-| Ошибки подключения к 3X-UI | Проверьте `XUI_API_URL`, логин и пароль |
+| Ошибки подключения к 3X-UI | Проверьте `XUI_API_URL` и `XUI_API_TOKEN` |
 | Профиль не создаётся | Убедитесь, что инбаунд с указанным ID существует в панели |
-| xhttp-профиль отклоняется панелью | Проверьте, что `INBOUND_{ID}_SECURITY=tls` задан корректно |
+| Ссылки не приходят через `/connect` | Проверьте `XUI_SUB_PORT` и доступность эндпоинта `/sub/` |
 | Проблемы с платежами | Проверьте `PAYMENT_TOKEN` |
 | Tribute webhook не срабатывает | Проверьте `TRIBUTE_API_KEY` и доступность порта `TRIBUTE_WEBHOOK_PORT` извне |
 | Tribute: 401 Unauthorized | API-ключ в `.env` не совпадает с ключом в Tribute Dashboard |
