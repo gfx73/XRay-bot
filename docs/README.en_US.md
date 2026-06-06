@@ -73,7 +73,16 @@ python src\app.py # use python3 and "/" instead of "\" on Linux
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `ADMINS` | Administrator IDs, comma-separated |
 | `XUI_API_URL` | 3X-UI panel URL (e.g., `http://ip:54321`) |
-| `XUI_API_TOKEN` | Bearer API token from 3X-UI (Settings → API Keys) |
+| `XUI_API_TOKEN` | Bearer API token from 3X-UI (Settings → API Keys → Generate API Key) |
+
+#### Panel parameters
+
+| Variable | Default | Description |
+|---|---|---|
+| `XUI_BASE_PATH` | `/panel` | Base path for 3X-UI API endpoints |
+| `XUI_SUB_PORT` | `54321` | Port for the subscription endpoint (`/sub/`) |
+| `XUI_VERIFY_SSL` | `False` | Verify panel SSL certificate (`True`/`False`) |
+| `SUBSCRIPTION_URL_BASE` | — | Hostname for subscription links. Auto-detected from `XUI_API_URL` if empty |
 
 #### Payment (at least one required)
 
@@ -83,39 +92,16 @@ python src\app.py # use python3 and "/" instead of "\" on Linux
 
 #### Tier configuration
 
-Specify inbound IDs from the 3x-ui panel. Protocol is detected automatically.
-
-**Where to find the ID:** 3x-ui panel → Inbounds → click **Edit** on the inbound → the ID is in the URL: `.../panel/#/inbounds/edit/**3**`
-
-```bash
-# Basic tier — one inbound
-BASIC_INBOUNDS=1
-
-# Basic with two servers
-BASIC_INBOUNDS=1,2
-
-# Premium — adds a second inbound on top of basic
-PREMIUM_INBOUNDS=3
-
-# Premium price = Basic price × multiplier (1.5 = +50%)
-PREMIUM_PRICE_MULTIPLIER=1.5
-
-# Traffic limit for premium in GB (0 = unlimited)
-PREMIUM_TRAFFIC_LIMIT_GB=100
-
-# Trial period settings
-TRIAL_DAYS=3
-TRIAL_TIER=basic
-```
-
-#### Optional / advanced parameters
+Inbound IDs from the 3x-ui panel. Protocol is detected automatically.
 
 | Variable | Default | Description |
 |---|---|---|
-| `XUI_BASE_PATH` | `/panel` | Base path for 3X-UI API endpoints |
-| `XUI_SUB_PORT` | `54321` | Port for the subscription endpoint (`/sub/`) |
-| `XUI_VERIFY_SSL` | `True` | Verify SSL certificates (`True`/`False`) |
-| `SUBSCRIPTION_URL_BASE` | — | Custom subscription base URL (auto-detected from `XUI_API_URL` if empty) |
+| `BASIC_INBOUNDS` | — | Inbound IDs for the Basic tier, comma-separated |
+| `PREMIUM_INBOUNDS` | — | Inbound IDs for the Premium tier (added on top of Basic). Leave empty if Premium is not needed |
+| `PREMIUM_PRICE_MULTIPLIER` | `1.5` | Premium price = Basic price × multiplier |
+| `PREMIUM_TRAFFIC_LIMIT_GB` | `0` | Traffic limit for premium clients in GB (`0` = unlimited) |
+| `TRIAL_DAYS` | `3` | Free trial period duration in days |
+| `TRIAL_TIER` | `basic` | Tier for the trial period (`basic` or `premium`) |
 
 #### Tribute (optional — second payment method)
 

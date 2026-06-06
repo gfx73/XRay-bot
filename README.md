@@ -85,7 +85,16 @@ python3 src/app.py
 | `BOT_TOKEN` | Токен Telegram-бота от @BotFather |
 | `ADMINS` | ID администраторов через запятую |
 | `XUI_API_URL` | URL панели 3X-UI (например: `http://ip:54321`) |
-| `XUI_API_TOKEN` | Bearer API-токен 3X-UI (Settings → API Keys) |
+| `XUI_API_TOKEN` | Bearer API-токен 3X-UI (Settings → API Keys → Generate API Key) |
+
+#### Параметры панели
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `XUI_BASE_PATH` | `/panel` | Базовый путь к API панели |
+| `XUI_SUB_PORT` | `54321` | Порт эндпоинта подписок (`/sub/`) |
+| `XUI_VERIFY_SSL` | `False` | Проверять SSL-сертификат панели (`True`/`False`) |
+| `SUBSCRIPTION_URL_BASE` | — | Хост для ссылок подписки. Если не задан — берётся из `XUI_API_URL` |
 
 #### Оплата (хотя бы один способ)
 
@@ -95,23 +104,16 @@ python3 src/app.py
 
 #### Конфигурация тарифов
 
-Укажите ID инбаундов из панели 3x-ui. Протокол определяется автоматически.
+ID инбаундов из панели 3x-ui. Протокол определяется автоматически из панели.
 
-**Где найти ID:** панель 3x-ui → «Inbounds» → нажмите «Edit» на нужном инбаунде → ID виден в URL: `.../panel/#/inbounds/edit/**3**`
-
-```bash
-# Базовый тариф — один инбаунд
-BASIC_INBOUNDS=1
-
-# Базовый с двумя серверами
-BASIC_INBOUNDS=1,2
-
-# Премиум — добавляет второй инбаунд поверх базового
-PREMIUM_INBOUNDS=3
-
-# Цена Premium = цена Basic × коэффициент (1.5 = +50%)
-PREMIUM_PRICE_MULTIPLIER=1.5
-```
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `BASIC_INBOUNDS` | — | ID инбаундов базового тарифа через запятую |
+| `PREMIUM_INBOUNDS` | — | ID инбаундов премиум-тарифа (добавляются поверх базовых). Оставьте пустым, если premium не нужен |
+| `PREMIUM_PRICE_MULTIPLIER` | `1.5` | Цена Premium = цена Basic × коэффициент |
+| `PREMIUM_TRAFFIC_LIMIT_GB` | `0` | Лимит трафика для premium-клиента в ГБ (`0` = безлимит) |
+| `TRIAL_DAYS` | `3` | Длительность бесплатного пробного периода в днях |
+| `TRIAL_TIER` | `basic` | Тариф пробного периода (`basic` или `premium`) |
 
 
 ## Команды бота
