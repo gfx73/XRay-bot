@@ -19,7 +19,7 @@ class Config(BaseModel):
 
     # Тарифы: ID инбаундов через запятую — например "1" или "1,3"
     # Протокол берётся из панели, VLESS-ссылки — из /sub/{sub_id}
-    BASIC_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
+    STANDARD_INBOUNDS: str = os.getenv("BASIC_INBOUNDS", "")
     PREMIUM_INBOUNDS: str = os.getenv("PREMIUM_INBOUNDS", "")
 
     # Лимит трафика для wl-клиента premium (в ГБ), 0 = безлимит
@@ -85,7 +85,7 @@ class Config(BaseModel):
 
     def get_inbound_configs(self, tier: SubscriptionTier) -> list[dict]:
         """Возвращает список инбаундов для тарифа: [{"id": int, "protocol": str}, ...]."""
-        raw = self.PREMIUM_INBOUNDS if tier == SubscriptionTier.PREMIUM else self.BASIC_INBOUNDS
+        raw = self.PREMIUM_INBOUNDS if tier == SubscriptionTier.PREMIUM else self.STANDARD_INBOUNDS
         return self._parse_inbound_configs_raw(raw)
 
     def calculate_price(self, months: int, tier: SubscriptionTier = SubscriptionTier.STANDARD) -> int:
