@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import io
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 
 import qrcode
@@ -26,6 +28,7 @@ from database import (
     create_static_profile,
     create_user,
     delete_user,
+    engine,
     fix_all_subscription_dates,
     get_all_users,
     get_static_profiles,
@@ -48,6 +51,7 @@ from functions import (
     get_safe_expiry_timestamp,
     get_user_stats,
     safe_json_loads,
+    sync_profiles_for_tier,
     update_client_expiry,
 )
 
@@ -113,11 +117,10 @@ def _has_profiles(user) -> bool:
 
 def _is_subscription_active(user) -> bool:
     now = datetime.utcnow()
-    if user.subscription_end and user.subscription_end > now:
-        return True
-    if getattr(user, 'premium_end', None) and user.premium_end > now:
-        return True
-    return False
+    return (
+        bool(user.subscription_end and user.subscription_end > now)
+        or bool(getattr(user, 'premium_end', None) and user.premium_end > now)
+    )
 
 
 async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str, premium_end=None) -> dict:
@@ -149,7 +152,7 @@ async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str,
     return profiles
 
 
-async def show_menu(bot: Bot, chat_id: int, message_id: int = None):
+async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
     """Отображение главного меню."""
     user = await get_user(chat_id)
     if not user:
@@ -485,22 +488,23 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot: 
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 
+def _parse_payment_payload(payload: str) -> tuple[str, int] | None:
+    if not payload.startswith("subscription_"):
+        return None
+    parts = payload[len("subscription_"):].split("_")
+    if len(parts) == 2 and parts[0] in ("basic", "premium"):
+        return parts[0], int(parts[1])
+    return None
+
+
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message, bot: Bot):
     try:
-        payload = message.successful_payment.invoice_payload
-
-        if payload.startswith("subscription_"):
-            remainder = payload[len("subscription_"):]
-            parts = remainder.split("_")
-            if len(parts) == 2 and parts[0] in ("basic", "premium"):
-                tier, months = parts[0], int(parts[1])
-            else:
-                await message.answer("❌ Ошибка: неверный формат платежа")
-                return
-        else:
+        parsed = _parse_payment_payload(message.successful_payment.invoice_payload)
+        if not parsed:
             await message.answer("❌ Ошибка: неверный формат платежа")
             return
+        tier, months = parsed
 
         final_price = config.calculate_price(months, tier)
         tier_label = TIER_LABELS.get(tier, tier)
@@ -519,85 +523,42 @@ async def process_successful_payment(message: Message, bot: Bot):
         success = await update_subscription(message.from_user.id, months, tier=tier)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
 
-        if success:
-            updated_user = await get_user(message.from_user.id)
-            std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
-            prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
-            existing = _get_profiles(updated_user)
-
-            profiles_to_save = {}
-
-            if tier == "basic":
-                # Обновляем только standard; wl сохраняем без изменений (premium может быть активен)
-                if "standard" in existing:
-                    await update_client_expiry(existing["standard"]["email"], std_expiry)
-                    profiles_to_save["standard"] = existing["standard"]
-                else:
-                    basic_cfgs = config.get_inbound_configs("basic")
-                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
-                    if new_std:
-                        profiles_to_save["standard"] = new_std
-                if "wl" in existing:
-                    profiles_to_save["wl"] = existing["wl"]
-
-            elif tier == "premium" and config.has_premium_inbounds():
-                # standard — по subscription_end, wl — по premium_end (независимые сроки)
-                if "standard" in existing:
-                    await update_client_expiry(existing["standard"]["email"], std_expiry)
-                    profiles_to_save["standard"] = existing["standard"]
-                else:
-                    basic_cfgs = config.get_inbound_configs("basic")
-                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
-                    if new_std:
-                        profiles_to_save["standard"] = new_std
-                if "wl" in existing:
-                    await update_client_expiry(existing["wl"]["email"], prem_expiry)
-                    profiles_to_save["wl"] = existing["wl"]
-                else:
-                    premium_cfgs = config.get_inbound_configs("premium")
-                    new_wl = await create_client(
-                        message.from_user.id, prem_expiry, premium_cfgs,
-                        email_suffix="_wl",
-                        traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
-                    )
-                    if new_wl:
-                        profiles_to_save["wl"] = new_wl
-
-            # premium без premium inbounds — только standard
-            elif "standard" in existing:
-                await update_client_expiry(existing["standard"]["email"], std_expiry)
-                profiles_to_save["standard"] = existing["standard"]
-            else:
-                basic_cfgs = config.get_inbound_configs("basic")
-                new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
-                if new_std:
-                    profiles_to_save["standard"] = new_std
-
-            with Session() as session:
-                db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
-                if db_user:
-                    db_user.profiles_data = json.dumps(profiles_to_save)
-                    # subscription_tier уже обновлён в update_subscription
-                    session.commit()
-
-            await message.answer(
-                f"✅ Оплата прошла успешно! Ваша подписка {action_type} на {months} {suffix}.\n"
-                f"Тариф: {tier_label}\n\n"
-                "Спасибо за покупку! 🎉"
-            )
-
-            admin_message = (
-                f"{action_type.capitalize()} подписка пользователем "
-                f"`{user.full_name}` | `{user.telegram_id}` "
-                f"на {months} {suffix} ({tier_label}) — {final_price}₽"
-            )
-            for admin_id in config.ADMINS:
-                try:
-                    await bot.send_message(admin_id, admin_message, parse_mode='Markdown')
-                except Exception as e:
-                    logger.error(f"🛑 Failed to send notification to admin {admin_id}: {e}")
-        else:
+        if not success:
             await message.answer("❌ Ошибка при обновлении подписки")
+            return
+
+        updated_user = await get_user(message.from_user.id)
+        std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
+        prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
+        existing = _get_profiles(updated_user)
+
+        profiles_to_save = await sync_profiles_for_tier(
+            message.from_user.id, tier, std_expiry, prem_expiry, existing
+        )
+
+        with Session() as session:
+            db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
+            if db_user:
+                db_user.profiles_data = json.dumps(profiles_to_save)
+                session.commit()
+
+        await message.answer(
+            f"✅ Оплата прошла успешно! Ваша подписка {action_type} на {months} {suffix}.\n"
+            f"Тариф: {tier_label}\n\n"
+            "Спасибо за покупку! 🎉"
+        )
+
+        admin_message = (
+            f"{action_type.capitalize()} подписка пользователем "
+            f"`{user.full_name}` | `{user.telegram_id}` "
+            f"на {months} {suffix} ({tier_label}) — {final_price}₽"
+        )
+        for admin_id in config.ADMINS:
+            try:
+                await bot.send_message(admin_id, admin_message, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"🛑 Failed to send notification to admin {admin_id}: {e}")
+
     except Exception as e:
         logger.error(f"🛑 Successful payment processing error: {e}")
         await message.answer("❌ Ошибка при обработке платежа")
@@ -705,10 +666,8 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     caption = instructions
 
     if delete_after:
-        try:
+        with contextlib.suppress(Exception):
             await msg_or_callback.delete()
-        except Exception:
-            pass
     await msg_or_callback.answer_photo(
         photo=photo,
         caption=caption[:1024],
@@ -788,9 +747,6 @@ async def admin_backup_db(callback: CallbackQuery):
         return
     await callback.answer()
 
-    import os
-
-    from database import engine
     db_path = os.path.abspath(engine.url.database)
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     filename = f"users_{date_str}.db"

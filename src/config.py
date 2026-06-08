@@ -51,7 +51,7 @@ class Config(BaseModel):
     # Tribute (опционально)
     # ────────────────────────────────────────────────
     TRIBUTE_API_KEY: str = os.getenv("TRIBUTE_API_KEY", "")
-    TRIBUTE_WEBHOOK_PORT: int = Field(default=os.getenv("TRIBUTE_WEBHOOK_PORT", 8081))
+    TRIBUTE_WEBHOOK_PORT: int = Field(default=os.getenv("TRIBUTE_WEBHOOK_PORT", "8081"))
     TRIBUTE_BASIC_PLAN_NAME: str = os.getenv("TRIBUTE_BASIC_PLAN_NAME", "Basic")
     TRIBUTE_PREMIUM_PLAN_NAME: str = os.getenv("TRIBUTE_PREMIUM_PLAN_NAME", "Premium")
     # Ссылки на страницы оплаты — копировать из Tribute Dashboard при публикации подписки
@@ -69,8 +69,8 @@ class Config(BaseModel):
         result = []
         if not raw:
             return result
-        for part in raw.split(","):
-            part = part.strip()
+        for raw_part in raw.split(","):
+            part = raw_part.strip()
             if part.isdigit():
                 result.append({"id": int(part)})
         return result

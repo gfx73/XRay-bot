@@ -2,24 +2,27 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import warnings
 from datetime import datetime, timedelta
 
 import coloredlogs
 import uvicorn
 from aiogram import Bot, Dispatcher
-from aiogram.types import PreCheckoutQuery
+from aiogram.types import BotCommand, BufferedInputFile, PreCheckoutQuery
 
 from config import config
 from database import (
     Session,
     User,
+    engine,
     get_all_users,
     init_db,
     validate_and_fix_subscription_date,
 )
 from functions import delete_client_by_email
 from handlers import setup_handlers
+from tribute_webhook import create_tribute_app
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -46,11 +49,8 @@ async def check_subscriptions(bot: Bot):
         await asyncio.sleep(3600)
 
 
-async def _check_user_subscription(bot, user, now: datetime):
-    std_active = bool(user.subscription_end and user.subscription_end > now)
-    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
-
-    # Уведомление за 1 день до окончания standard
+async def _send_expiry_notifications(bot, user, now: datetime, std_active: bool, prem_active: bool):
+    """Send 24h expiry warning notifications."""
     if std_active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
         try:
             await bot.send_message(
@@ -65,7 +65,6 @@ async def _check_user_subscription(bot, user, now: datetime):
         except Exception as e:
             logger.warning(f"⚠️ Notification error: {e}")
 
-    # Уведомление за 1 день до окончания premium
     if prem_active and (user.premium_end - now < timedelta(days=1)) and not user.premium_notified:
         try:
             await bot.send_message(
@@ -80,6 +79,29 @@ async def _check_user_subscription(bot, user, now: datetime):
         except Exception as e:
             logger.warning(f"⚠️ Notification error: {e}")
 
+
+async def _delete_profile_slot(profiles: dict, slot_key: str):
+    """Delete one expired VPN slot from profiles dict."""
+    profile = profiles.get(slot_key, {})
+    email = profile.get("email") if isinstance(profile, dict) else None
+    if email:
+        try:
+            success = await delete_client_by_email(email)
+            if success:
+                logger.info(f"✅ Deleted expired {slot_key} client {email}")
+            else:
+                logger.warning(f"⚠️ Failed to delete {email}")
+        except Exception as e:
+            logger.warning(f"⚠️ Deletion error for {email}: {e}")
+    del profiles[slot_key]
+
+
+async def _check_user_subscription(bot, user, now: datetime):
+    std_active = bool(user.subscription_end and user.subscription_end > now)
+    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
+
+    await _send_expiry_notifications(bot, user, now, std_active, prem_active)
+
     if not user.profiles_data:
         return
 
@@ -93,36 +115,12 @@ async def _check_user_subscription(bot, user, now: datetime):
 
     changed = False
 
-    # Удаление истёкшего standard профиля
     if not std_active and "standard" in profiles:
-        std_profile = profiles.get("standard", {})
-        email = std_profile.get("email") if isinstance(std_profile, dict) else None
-        if email:
-            try:
-                success = await delete_client_by_email(email)
-                if success:
-                    logger.info(f"✅ Deleted expired standard client {email}")
-                else:
-                    logger.warning(f"⚠️ Failed to delete {email}")
-            except Exception as e:
-                logger.warning(f"⚠️ Deletion error for {email}: {e}")
-        del profiles["standard"]
+        await _delete_profile_slot(profiles, "standard")
         changed = True
 
-    # Удаление истёкшего wl (premium) профиля
     if not prem_active and "wl" in profiles:
-        wl_profile = profiles.get("wl", {})
-        email = wl_profile.get("email") if isinstance(wl_profile, dict) else None
-        if email:
-            try:
-                success = await delete_client_by_email(email)
-                if success:
-                    logger.info(f"✅ Deleted expired wl client {email}")
-                else:
-                    logger.warning(f"⚠️ Failed to delete {email}")
-            except Exception as e:
-                logger.warning(f"⚠️ Deletion error for {email}: {e}")
-        del profiles["wl"]
+        await _delete_profile_slot(profiles, "wl")
         changed = True
 
     if changed:
@@ -147,9 +145,6 @@ async def send_daily_backup(bot: Bot):
     while True:
         await asyncio.sleep(86400)
         try:
-            from aiogram.types import BufferedInputFile
-
-            from database import engine
             db_path = os.path.abspath(engine.url.database)
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
             filename = f"users_{date_str}.db"
@@ -194,7 +189,6 @@ async def update_admins_status():
 
 async def setup_bot_commands(bot: Bot):
     """Регистрация команд бота в меню Telegram."""
-    from aiogram.types import BotCommand
     commands = [
         BotCommand(command="start", description="🚀 Запуск бота"),
         BotCommand(command="menu", description="📋 Главное меню"),
@@ -244,7 +238,6 @@ async def main():
     ]
 
     if config.TRIBUTE_API_KEY:
-        from tribute_webhook import create_tribute_app
         tribute_app = create_tribute_app(bot)
         server = uvicorn.Server(uvicorn.Config(
             tribute_app,
@@ -278,4 +271,4 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         logger.error(f"❌ Main loop error: {e}")
-        exit(1)
+        sys.exit(1)

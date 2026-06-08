@@ -75,6 +75,36 @@ class XUIAPI:
     # Создание клиентов (v3.2.8 unified API)
     # ────────────────────────────────────────────────────────
 
+    async def _detect_reality_flow(self, inbound_cfgs: list[dict]) -> str:
+        """Detect VLESS flow from the first Reality inbound."""
+        for cfg in inbound_cfgs:
+            inbound = await self.get_inbound(cfg["id"])
+            if inbound and inbound.get("protocol") == "reality":
+                try:
+                    settings = json.loads(inbound.get("settings", "{}"))
+                    clients = settings.get("clients", [])
+                    flow = clients[0].get("flow", "") if clients else ""
+                    if not flow:
+                        stream = json.loads(inbound.get("streamSettings", "{}"))
+                        if stream.get("realitySettings"):
+                            flow = "xtls-rprx-vision"
+                except Exception:
+                    flow = "xtls-rprx-vision"
+                return flow
+        return ""
+
+    async def _collect_inbound_meta(self, inbound_cfgs: list[dict]) -> dict:
+        """Collect port/remark metadata from each inbound."""
+        inbounds_meta = {}
+        for cfg in inbound_cfgs:
+            inbound = await self.get_inbound(cfg["id"])
+            if inbound:
+                inbounds_meta[str(cfg["id"])] = {
+                    "port": inbound.get("port"),
+                    "remark": inbound.get("remark", ""),
+                }
+        return inbounds_meta
+
     async def create_client(
         self,
         telegram_id: int,
@@ -106,23 +136,7 @@ class XUIAPI:
             logger.error(f"🚨 Invalid expiry time ({expiry_time}), setting to 0")
             expiry_ms = 0
 
-        # Определяем flow из первого Reality-инбаунда (протокол берём из панели)
-        flow = ""
-        for cfg in inbound_cfgs:
-            inbound = await self.get_inbound(cfg["id"])
-            if inbound and inbound.get("protocol") == "reality":
-                try:
-                    settings = json.loads(inbound.get("settings", "{}"))
-                    clients = settings.get("clients", [])
-                    if clients:
-                        flow = clients[0].get("flow", "")
-                    if not flow:
-                        stream = json.loads(inbound.get("streamSettings", "{}"))
-                        if stream.get("realitySettings"):
-                            flow = "xtls-rprx-vision"
-                except Exception:
-                    flow = "xtls-rprx-vision"
-                break
+        flow = await self._detect_reality_flow(inbound_cfgs)
 
         payload = {
             "client": {
@@ -156,16 +170,7 @@ class XUIAPI:
             logger.exception(f"🛑 Create client error: {e}")
             return None
 
-        # Забираем port и remark из каждого инбаунда для генерации VLESS URL
-        inbounds_meta = {}
-        for cfg in inbound_cfgs:
-            inbound = await self.get_inbound(cfg["id"])
-            if inbound:
-                inbounds_meta[str(cfg["id"])] = {
-                    "port": inbound.get("port"),
-                    "remark": inbound.get("remark", ""),
-                }
-
+        inbounds_meta = await self._collect_inbound_meta(inbound_cfgs)
         logger.info(f"✅ Client created: {email} in inbounds {inbound_ids}")
         return {
             "email": email,
@@ -175,7 +180,7 @@ class XUIAPI:
             "inbounds": inbounds_meta,
         }
 
-    async def create_static_client(self, profile_name: str):
+    async def create_static_client(self, profile_name: str):  # noqa: PLR0911
         """Создаёт статический клиент в первом Basic-инбаунде."""
         basic_configs = config.get_inbound_configs("basic")
         if not basic_configs:
@@ -478,6 +483,57 @@ async def get_user_stats(email: str):
 # URL-генерация
 # ──────────────────────────────────────────────────────────────
 
+async def _sync_standard_slot(telegram_id: int, std_expiry: int, existing: dict) -> dict | None:
+    """Update expiry for existing standard client or create a new one."""
+    if "standard" in existing:
+        await update_client_expiry(existing["standard"]["email"], std_expiry)
+        return existing["standard"]
+    basic_cfgs = config.get_inbound_configs("basic")
+    return await create_client(telegram_id, std_expiry, basic_cfgs)
+
+
+async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: dict) -> dict | None:
+    """Update expiry for existing wl client or create a new one."""
+    if "wl" in existing:
+        await update_client_expiry(existing["wl"]["email"], prem_expiry)
+        return existing["wl"]
+    premium_cfgs = config.get_inbound_configs("premium")
+    return await create_client(
+        telegram_id, prem_expiry, premium_cfgs,
+        email_suffix="_wl",
+        traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+    )
+
+
+async def sync_profiles_for_tier(
+    telegram_id: int,
+    tier: str,
+    std_expiry: int,
+    prem_expiry: int,
+    existing: dict,
+) -> dict:
+    """Sync VPN profiles after a subscription payment.
+
+    - basic: syncs standard slot, copies existing wl without updating its expiry.
+    - premium + premium inbounds: syncs both standard and wl slots.
+    - premium without premium inbounds: syncs standard only (no wl).
+    """
+    profiles: dict = {}
+
+    std_slot = await _sync_standard_slot(telegram_id, std_expiry, existing)
+    if std_slot:
+        profiles["standard"] = std_slot
+
+    if tier == "premium" and config.has_premium_inbounds():
+        wl_slot = await _sync_wl_slot(telegram_id, prem_expiry, existing)
+        if wl_slot:
+            profiles["wl"] = wl_slot
+    elif tier == "basic" and "wl" in existing:
+        profiles["wl"] = existing["wl"]
+
+    return profiles
+
+
 def generate_sub_url(sub_id: str) -> str:
     """Генерирует ссылку на подписку 3x-ui."""
     sub_path = config.SUB_BASE_PATH.strip("/")
@@ -495,13 +551,15 @@ async def fetch_sub_configs(sub_url: str) -> list[str]:
         sub_url = "https://" + sub_url
     connector = aiohttp.TCPConnector(ssl=config.XUI_VERIFY_SSL)
     try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(sub_url) as resp:
-                if resp.status != 200:
-                    logger.error(f"🛑 fetch_sub_configs: status={resp.status} for {sub_url}")
-                    return []
-                content = await resp.text()
-                return [line for line in content.splitlines() if line.startswith("vless://")]
+        async with (
+            aiohttp.ClientSession(connector=connector) as session,
+            session.get(sub_url) as resp,
+        ):
+            if resp.status != 200:
+                logger.error(f"🛑 fetch_sub_configs: status={resp.status} for {sub_url}")
+                return []
+            content = await resp.text()
+            return [line for line in content.splitlines() if line.startswith("vless://")]
     except Exception as e:
         logger.error(f"🛑 fetch_sub_configs error: {e}")
         return []
@@ -511,7 +569,7 @@ async def fetch_sub_configs(sub_url: str) -> list[str]:
 # Timestamp / expiry утилиты
 # ──────────────────────────────────────────────────────────────
 
-def get_safe_expiry_timestamp(subscription_end) -> int:
+def get_safe_expiry_timestamp(subscription_end) -> int:  # noqa: PLR0911
     """Безопасно получает timestamp из даты окончания подписки."""
     logger.info(f"🔍 [get_safe_expiry_timestamp] Input: {subscription_end}, type: {type(subscription_end)}")
 
@@ -570,48 +628,56 @@ async def force_update_profile_expiry(email: str, subscription_end) -> bool:
 # Проверка и исправление подписок
 # ──────────────────────────────────────────────────────────────
 
-async def check_and_fix_subscriptions() -> dict:
-    """Проверяет и исправляет расхождения между 3x-ui и базой данных."""
-    api = XUIAPI()
-    try:
-        all_inbound_ids: set[int] = set()
-        for tier in ("basic", "premium"):
-            for cfg in config.get_inbound_configs(tier):
-                all_inbound_ids.add(cfg["id"])
+async def _collect_clients_from_inbounds(api: "XUIAPI", inbound_ids: set[int]) -> list[dict]:
+    """Fetch all clients from all given inbound IDs."""
+    all_clients: list[dict] = []
+    for inbound_id in inbound_ids:
+        clients = await api.get_all_clients(inbound_id)
+        if clients:
+            all_clients.extend({**c, "_inbound_id": inbound_id} for c in clients)
+    return all_clients
 
-        logger.info(f"🔍 [check_and_fix] Checking inbounds: {all_inbound_ids}")
 
-        all_clients_3xui: list[dict] = []
-        for inbound_id in all_inbound_ids:
-            clients = await api.get_all_clients(inbound_id)
-            if clients:
-                for c in clients:
-                    all_clients_3xui.append({**c, "_inbound_id": inbound_id})
-
-        if not all_clients_3xui:
-            return {"error": "Failed to get clients from 3x-ui"}
-
-        from database import get_users_with_profiles
-        users_db = await get_users_with_profiles()
-
-        # Маппинг email → (user, первый inbound_id) для всех клиентов (standard + wl)
-        users_map: dict[str, tuple] = {}
-        for user in users_db:
-            if not user.profiles_data:
+def _build_email_user_map(users_db: list) -> dict[str, tuple]:
+    """Build email → (user, inbound_id) mapping from DB users with profiles."""
+    users_map: dict[str, tuple] = {}
+    for user in users_db:
+        if not user.profiles_data:
+            continue
+        try:
+            profiles = json.loads(user.profiles_data)
+            if not isinstance(profiles, dict) or "standard" not in profiles:
                 continue
-            try:
-                profiles = json.loads(user.profiles_data)
-                if not isinstance(profiles, dict) or "standard" not in profiles:
-                    continue
-                for slot_profile in profiles.values():
-                    if not isinstance(slot_profile, dict):
-                        continue
+            for slot_profile in profiles.values():
+                if isinstance(slot_profile, dict):
                     email = slot_profile.get("email")
                     if email:
                         first_iid = slot_profile.get("inbound_ids", [None])[0]
                         users_map[email] = (user, first_iid)
-            except Exception as e:
-                logger.error(f"🛑 Error parsing profiles_data for user {user.telegram_id}: {e}")
+        except Exception as e:
+            logger.error(f"🛑 Error parsing profiles_data for user {user.telegram_id}: {e}")
+    return users_map
+
+
+async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
+    """Проверяет и исправляет расхождения между 3x-ui и базой данных."""
+    api = XUIAPI()
+    try:
+        all_inbound_ids: set[int] = {
+            cfg["id"]
+            for tier in ("basic", "premium")
+            for cfg in config.get_inbound_configs(tier)
+        }
+
+        logger.info(f"🔍 [check_and_fix] Checking inbounds: {all_inbound_ids}")
+
+        all_clients_3xui = await _collect_clients_from_inbounds(api, all_inbound_ids)
+        if not all_clients_3xui:
+            return {"error": "Failed to get clients from 3x-ui"}
+
+        from database import get_users_with_profiles  # noqa: PLC0415
+        users_db = await get_users_with_profiles()
+        users_map = _build_email_user_map(users_db)
 
         stats = {
             "total_3xui": len(all_clients_3xui),
@@ -629,15 +695,12 @@ async def check_and_fix_subscriptions() -> dict:
             expiry_time_3xui = client.get("expiryTime", 0)
             inbound_id = client.get("_inbound_id", 0)
 
-            if not email or email == "Base":
-                continue
-
-            # Для unified-клиентов один email появляется в нескольких инбаундах —
-            # достаточно проверить один раз
-            if email in seen_emails:
+            if not email or email == "Base" or email in seen_emails:
                 continue
             seen_emails.add(email)
 
+            # Для unified-клиентов один email появляется в нескольких инбаундах —
+            # достаточно проверить один раз
             expiry_time_3xui_seconds = expiry_time_3xui // 1000 if expiry_time_3xui > 0 else 0
 
             if email not in users_map:
@@ -651,7 +714,7 @@ async def check_and_fix_subscriptions() -> dict:
                 })
                 continue
 
-            user, db_inbound_id = users_map[email]
+            user, _ = users_map[email]
             try:
                 if isinstance(user.subscription_end, str):
                     sub_end_db = datetime.fromisoformat(user.subscription_end)
@@ -660,18 +723,18 @@ async def check_and_fix_subscriptions() -> dict:
 
                 expiry_time_db = int(sub_end_db.timestamp()) if sub_end_db > datetime.utcnow() else 0
                 diff = abs(expiry_time_3xui_seconds - expiry_time_db)
+                detail_base = {
+                    "email": email,
+                    "telegram_id": user.telegram_id,
+                    "expiry_3xui": expiry_time_3xui_seconds,
+                    "expiry_db": expiry_time_db,
+                    "diff": diff,
+                    "inbound_id": inbound_id,
+                }
 
                 if diff <= 60:
                     stats["matched"] += 1
-                    stats["details"].append({
-                        "email": email,
-                        "telegram_id": user.telegram_id,
-                        "status": "matched",
-                        "expiry_3xui": expiry_time_3xui_seconds,
-                        "expiry_db": expiry_time_db,
-                        "diff": diff,
-                        "inbound_id": inbound_id,
-                    })
+                    stats["details"].append({**detail_base, "status": "matched"})
                 else:
                     stats["mismatch"] += 1
                     logger.warning(f"⚠️ Mismatch for {email}: 3x-ui={expiry_time_3xui_seconds}, DB={expiry_time_db}")
@@ -680,24 +743,10 @@ async def check_and_fix_subscriptions() -> dict:
                         status = "fixed" if result else "fix_failed"
                         if result:
                             stats["fixed"] += 1
-                        stats["details"].append({
-                            "email": email,
-                            "telegram_id": user.telegram_id,
-                            "status": status,
-                            "expiry_3xui": expiry_time_3xui_seconds,
-                            "expiry_db": expiry_time_db,
-                            "diff": diff,
-                            "inbound_id": inbound_id,
-                        })
+                        stats["details"].append({**detail_base, "status": status})
                     except Exception as e:
                         logger.error(f"🛑 Error fixing subscription for {email}: {e}")
-                        stats["details"].append({
-                            "email": email,
-                            "telegram_id": user.telegram_id,
-                            "status": "fix_error",
-                            "error": str(e),
-                            "inbound_id": inbound_id,
-                        })
+                        stats["details"].append({**detail_base, "status": "fix_error", "error": str(e)})
             except Exception as e:
                 logger.error(f"🛑 Error processing user {user.telegram_id}: {e}")
 

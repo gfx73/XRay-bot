@@ -63,7 +63,7 @@ async def get_user(telegram_id: int):
                 logger.info(f"✅ Fixed subscription date for user {telegram_id}: {original_end} -> {user.subscription_end}")
         return user
 
-async def create_user(telegram_id: int, full_name: str, username: str = None, is_admin: bool = False):
+async def create_user(telegram_id: int, full_name: str, username: str | None = None, is_admin: bool = False):
     with Session() as session:
         subscription_end = validate_and_fix_subscription_date(
             datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
@@ -92,7 +92,7 @@ async def delete_user_profile(telegram_id: int):
             session.commit()
             logger.info(f"✅ User profile deleted: {telegram_id}")
 
-async def update_subscription(telegram_id: int, months: int, tier: str = None):
+async def update_subscription(telegram_id: int, months: int, tier: str | None = None):
     """Обновляет подписку с учётом текущего состояния.
 
     tier="basic"   → продлевает subscription_end, premium_end не трогает.
@@ -137,7 +137,7 @@ async def update_subscription(telegram_id: int, months: int, tier: str = None):
             return True
         return False
 
-async def get_all_users(with_subscription: bool = None):
+async def get_all_users(with_subscription: bool | None = None):
     with Session() as session:
         query = session.query(User)
         if with_subscription is not None:
@@ -149,7 +149,7 @@ async def get_all_users(with_subscription: bool = None):
             else:
                 query = query.filter(
                     User.subscription_end <= now,
-                    or_(User.premium_end == None, User.premium_end <= now),
+                    or_(User.premium_end.is_(None), User.premium_end <= now),
                 )
         return query.all()
 
