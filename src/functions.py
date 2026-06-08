@@ -25,6 +25,15 @@ def safe_json_loads(value, default=None):
         return default
 
 
+def _as_dict(v) -> dict:
+    """Return v as a dict, parsing JSON string if needed."""
+    if isinstance(v, dict):
+        return v
+    if not v:
+        return {}
+    return json.loads(v)
+
+
 # ──────────────────────────────────────────────────────────────
 # Основной класс API 3x-ui (v3.2.8+)
 # ──────────────────────────────────────────────────────────────
@@ -35,6 +44,8 @@ class XUIAPI:
 
     async def login(self):
         """Создаёт сессию с Bearer API-токеном (3x-ui v3.0.2+)."""
+        if self.session is not None and not self.session.closed:
+            return True
         if not config.XUI_API_TOKEN:
             logger.error("🛑 XUI_API_TOKEN is not set")
             return False
@@ -76,46 +87,32 @@ class XUIAPI:
     # Создание клиентов (v3.2.8 unified API)
     # ────────────────────────────────────────────────────────
 
-    async def _detect_reality_flow(self, inbound_cfgs: list[dict]) -> str:
-        """Detect VLESS flow from the first Reality inbound."""
-        for cfg in inbound_cfgs:
-            inbound = await self.get_inbound(cfg["id"])
-            if not inbound:
-                logger.warning(f"⚠️  _detect_reality_flow: get_inbound({cfg['id']}) returned None")
-                continue
-            try:
-                protocol = inbound.get("protocol", "")
-                raw_stream = inbound.get("streamSettings", "{}")
-                stream = json.loads(raw_stream)
-                security = stream.get("security", "")
-                logger.info(
-                    f"🔍 Inbound {cfg['id']}: protocol={protocol!r}, security={security!r}"
-                )
-                if security != "reality":
-                    continue
-                settings = json.loads(inbound.get("settings", "{}"))
-                clients = settings.get("clients", [])
-                flow = clients[0].get("flow", "") if clients else ""
-                result = flow or "xtls-rprx-vision"
-                logger.info(f"✅ Reality flow detected for inbound {cfg['id']}: {result!r}")
-                return result
-            except Exception as e:
-                logger.exception(f"🛑 _detect_reality_flow error for inbound {cfg['id']}: {e}")
-                return "xtls-rprx-vision"
-        logger.info("ℹ️  No Reality inbound found — flow set to empty string")
-        return ""
-
-    async def _collect_inbound_meta(self, inbound_cfgs: list[dict]) -> dict:
-        """Collect port/remark metadata from each inbound."""
+    async def _prepare_inbound_data(self, inbound_cfgs: list[dict]) -> tuple[str, dict]:
+        """Fetch each inbound once; return (reality_flow, inbounds_meta)."""
+        flow = ""
         inbounds_meta = {}
         for cfg in inbound_cfgs:
             inbound = await self.get_inbound(cfg["id"])
-            if inbound:
-                inbounds_meta[str(cfg["id"])] = {
-                    "port": inbound.get("port"),
-                    "remark": inbound.get("remark", ""),
-                }
-        return inbounds_meta
+            if not inbound:
+                logger.warning(f"⚠️  _prepare_inbound_data: get_inbound({cfg['id']}) returned None")
+                continue
+            inbounds_meta[str(cfg["id"])] = {
+                "port": inbound.get("port"),
+                "remark": inbound.get("remark", ""),
+            }
+            if not flow:
+                stream = _as_dict(inbound.get("streamSettings"))
+                security = stream.get("security", "")
+                logger.info(f"🔍 Inbound {cfg['id']}: security={security!r}")
+                if security == "reality":
+                    settings = _as_dict(inbound.get("settings"))
+                    clients = settings.get("clients", [])
+                    detected = clients[0].get("flow", "") if clients else ""
+                    flow = detected or "xtls-rprx-vision"
+                    logger.info(f"✅ Reality flow detected for inbound {cfg['id']}: {flow!r}")
+        if not flow:
+            logger.info("ℹ️  No Reality inbound found — flow set to empty string")
+        return flow, inbounds_meta
 
     async def create_client(
         self,
@@ -149,7 +146,7 @@ class XUIAPI:
             logger.error(f"🚨 Invalid expiry time ({expiry_time}), setting to 0")
             expiry_ms = 0
 
-        flow = await self._detect_reality_flow(inbound_cfgs)
+        flow, inbounds_meta = await self._prepare_inbound_data(inbound_cfgs)
 
         payload = {
             "client": {
@@ -188,7 +185,6 @@ class XUIAPI:
             logger.exception(f"🛑 Create client error: {e}")
             return None
 
-        inbounds_meta = await self._collect_inbound_meta(inbound_cfgs)
         logger.info(f"✅ Client created: {email} in inbounds {inbound_ids}")
         return ProfileSlot(
             email=email,
@@ -210,7 +206,6 @@ class XUIAPI:
 
         inbound_cfg = basic_configs[0]
         inbound_id = inbound_cfg["id"]
-        protocol = inbound_cfg.get("protocol", "reality")
 
         inbound = await self.get_inbound(inbound_id)
         if not inbound:
@@ -219,20 +214,13 @@ class XUIAPI:
         client_id = str(uuid.uuid4())
         sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"static_{profile_name}"))
 
-        # Определяем flow для Reality
         flow = ""
-        if protocol == "reality":
-            try:
-                settings = json.loads(inbound.get("settings", "{}"))
-                clients = settings.get("clients", [])
-                if clients:
-                    flow = clients[0].get("flow", "")
-                if not flow:
-                    stream = json.loads(inbound.get("streamSettings", "{}"))
-                    if stream.get("realitySettings"):
-                        flow = "xtls-rprx-vision"
-            except Exception:
-                flow = "xtls-rprx-vision"
+        stream = _as_dict(inbound.get("streamSettings"))
+        if stream.get("security") == "reality":
+            settings = _as_dict(inbound.get("settings"))
+            clients = settings.get("clients", [])
+            flow = clients[0].get("flow", "") if clients else ""
+            flow = flow or "xtls-rprx-vision"
 
         payload = {
             "client": {
@@ -589,25 +577,6 @@ def generate_sub_url(sub_id: str) -> str:
     return f"{config.SUBSCRIPTION_URL_BASE.rstrip('/')}:{config.XUI_SUB_PORT}/{sub_path}/{sub_id}"
 
 
-async def fetch_sub_configs(sub_url: str) -> list[str]:
-    """Получает список vless:// ссылок из /sub/{sub_id} эндпоинта 3x-ui."""
-    if not sub_url.startswith(("http://", "https://")):
-        sub_url = "https://" + sub_url
-    connector = aiohttp.TCPConnector(ssl=config.XUI_VERIFY_SSL)
-    try:
-        async with (
-            aiohttp.ClientSession(connector=connector) as session,
-            session.get(sub_url) as resp,
-        ):
-            if resp.status != 200:
-                logger.error(f"🛑 fetch_sub_configs: status={resp.status} for {sub_url}")
-                return []
-            content = await resp.text()
-            return [line for line in content.splitlines() if line.startswith("vless://")]
-    except Exception as e:
-        logger.error(f"🛑 fetch_sub_configs error: {e}")
-        return []
-
 
 # ──────────────────────────────────────────────────────────────
 # Timestamp / expiry утилиты
@@ -749,12 +718,13 @@ async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
 
             user, _ = users_map[email]
             try:
-                if isinstance(user.subscription_end, str):
-                    sub_end_db = datetime.fromisoformat(user.subscription_end)
+                sub_end_raw = user.premium_end if email.endswith("_wl") else user.subscription_end
+                if isinstance(sub_end_raw, str):
+                    sub_end_db = datetime.fromisoformat(sub_end_raw)
                 else:
-                    sub_end_db = user.subscription_end
+                    sub_end_db = sub_end_raw
 
-                expiry_time_db = int(sub_end_db.timestamp()) if sub_end_db > datetime.utcnow() else 0
+                expiry_time_db = int(sub_end_db.timestamp()) if sub_end_db and sub_end_db > datetime.utcnow() else 0
                 diff = abs(expiry_time_3xui_seconds - expiry_time_db)
                 detail_base = {
                     "email": email,
@@ -772,7 +742,8 @@ async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
                     stats["mismatch"] += 1
                     logger.warning(f"⚠️ Mismatch for {email}: 3x-ui={expiry_time_3xui_seconds}, DB={expiry_time_db}")
                     try:
-                        result = await force_update_profile_expiry(email, user.subscription_end)
+                        expiry_ts = get_safe_expiry_timestamp(sub_end_raw)
+                        result = await api.update_client_expiry(email, expiry_ts)
                         status = "fixed" if result else "fix_failed"
                         if result:
                             stats["fixed"] += 1
