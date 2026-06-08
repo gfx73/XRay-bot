@@ -127,6 +127,9 @@ def create_tribute_app(bot: Bot) -> FastAPI:
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON") from None
 
+        logger.info("Tribute webhook received")
+        logger.info(data)
+
         event_name = data.get("name", "")
         payload = data.get("payload", {})
         telegram_id: int | None = payload.get("telegram_user_id")
