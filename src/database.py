@@ -1,13 +1,22 @@
-from config import config
-from functions import delete_client_by_email
-
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, func, or_, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+import json
+import logging
 from datetime import datetime, timedelta
 
-import asyncio
-import logging
-import json
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    func,
+    or_,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+from config import config
+from functions import delete_client_by_email
 
 logger = logging.getLogger(__name__)
 

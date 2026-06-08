@@ -1,31 +1,55 @@
 import asyncio
-import logging
-import json
 import io
-import qrcode
+import json
+import logging
 from datetime import datetime, timedelta
-from aiogram import Dispatcher, Router, F, Bot
-from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery, BufferedInputFile
+
+import qrcode
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    LabeledPrice,
+    Message,
+    PreCheckoutQuery,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
 from config import config
 from database import (
-    StaticProfile, get_user, create_user, update_subscription,
-    get_all_users, create_static_profile, get_static_profiles,
-    User, Session, get_user_stats as db_user_stats, delete_user,
-    fix_all_subscription_dates, get_users_with_profiles,
+    Session,
+    StaticProfile,
+    User,
+    create_static_profile,
+    create_user,
+    delete_user,
+    fix_all_subscription_dates,
+    get_all_users,
+    get_static_profiles,
+    get_user,
+    get_users_with_profiles,
+    update_subscription,
+)
+from database import (
+    get_user_stats as db_user_stats,
 )
 from functions import (
+    check_and_fix_subscriptions,
     create_client,
-    delete_client_by_email, fetch_sub_configs,
-    get_user_stats, create_static_client, get_global_stats,
-    get_online_users, generate_sub_url, update_client_expiry,
-    get_safe_expiry_timestamp, force_update_profile_expiry,
-    check_and_fix_subscriptions, safe_json_loads,
+    create_static_client,
+    delete_client_by_email,
+    force_update_profile_expiry,
+    generate_sub_url,
+    get_global_stats,
+    get_online_users,
+    get_safe_expiry_timestamp,
+    get_user_stats,
+    safe_json_loads,
+    update_client_expiry,
 )
-from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -539,16 +563,15 @@ async def process_successful_payment(message: Message, bot: Bot):
                     if new_wl:
                         profiles_to_save["wl"] = new_wl
 
+            # premium без premium inbounds — только standard
+            elif "standard" in existing:
+                await update_client_expiry(existing["standard"]["email"], std_expiry)
+                profiles_to_save["standard"] = existing["standard"]
             else:
-                # premium без premium inbounds — только standard
-                if "standard" in existing:
-                    await update_client_expiry(existing["standard"]["email"], std_expiry)
-                    profiles_to_save["standard"] = existing["standard"]
-                else:
-                    basic_cfgs = config.get_inbound_configs("basic")
-                    new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
-                    if new_std:
-                        profiles_to_save["standard"] = new_std
+                basic_cfgs = config.get_inbound_configs("basic")
+                new_std = await create_client(message.from_user.id, std_expiry, basic_cfgs)
+                if new_std:
+                    profiles_to_save["standard"] = new_std
 
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
@@ -766,6 +789,7 @@ async def admin_backup_db(callback: CallbackQuery):
     await callback.answer()
 
     import os
+
     from database import engine
     db_path = os.path.abspath(engine.url.database)
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -842,7 +866,7 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
             else:
                 await message.answer("❌ Пользователь не найден")
     except Exception as e:
-        await message.answer(f"Ошибка: {str(e)}")
+        await message.answer(f"Ошибка: {e!s}")
     finally:
         await state.clear()
 
@@ -888,8 +912,7 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
             user = session.query(User).filter_by(telegram_id=user_id).first()
             if user:
                 new_end = user.subscription_end - timedelta(seconds=total_seconds)
-                if new_end < datetime.utcnow():
-                    new_end = datetime.utcnow()
+                new_end = max(new_end, datetime.utcnow())
                 user.subscription_end = new_end
                 session.commit()
 
@@ -909,7 +932,7 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
             else:
                 await message.answer("❌ Пользователь не найден")
     except Exception as e:
-        await message.answer(f"Ошибка: {str(e)}")
+        await message.answer(f"Ошибка: {e!s}")
     finally:
         await state.clear()
 
@@ -1172,7 +1195,7 @@ async def admin_fix_profiles(callback: CallbackQuery):
         await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())
     except Exception as e:
         logger.error(f"🛑 Error in admin_fix_profiles: {e}")
-        await callback.message.answer(f"❌ Ошибка при исправлении профилей: {str(e)}")
+        await callback.message.answer(f"❌ Ошибка при исправлении профилей: {e!s}")
 
 
 @router.callback_query(F.data == "admin_check_subscriptions")
@@ -1221,7 +1244,7 @@ async def admin_check_subscriptions(callback: CallbackQuery):
         await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())
     except Exception as e:
         logger.error(f"🛑 Error in admin_check_subscriptions: {e}")
-        await callback.message.answer(f"❌ Ошибка при проверке подписок: {str(e)}")
+        await callback.message.answer(f"❌ Ошибка при проверке подписок: {e!s}")
 
 
 @router.callback_query(F.data == "admin_delete_user")
@@ -1267,7 +1290,7 @@ async def admin_delete_user_process(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка: Telegram ID должен быть числом")
     except Exception as e:
         logger.error(f"🛑 Error in admin_delete_user_process: {e}")
-        await message.answer(f"❌ Ошибка: {str(e)}")
+        await message.answer(f"❌ Ошибка: {e!s}")
         await state.clear()
 
 
@@ -1295,7 +1318,7 @@ async def admin_confirm_delete_user(callback: CallbackQuery):
         await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())
     except Exception as e:
         logger.error(f"🛑 Error in admin_confirm_delete_user: {e}")
-        await callback.message.answer(f"❌ Ошибка при удалении: {str(e)}")
+        await callback.message.answer(f"❌ Ошибка при удалении: {e!s}")
 
 
 @router.callback_query(F.data == "back_to_menu")

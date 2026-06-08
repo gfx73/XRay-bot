@@ -1,12 +1,12 @@
-import aiohttp
-import base64
-import uuid
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
-from typing import Optional
-from config import config
 from urllib.parse import urlparse
+
+import aiohttp
+
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class XUIAPI:
         inbound_cfgs: list[dict],
         email_suffix: str = "",
         traffic_limit_gb: int = 0,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Создаёт клиента во всех указанных инбаундах одним запросом.
 
         Args:
@@ -405,7 +405,7 @@ async def create_client(
     inbound_cfgs: list[dict],
     email_suffix: str = "",
     traffic_limit_gb: int = 0,
-) -> Optional[dict]:
+) -> dict | None:
     """Создаёт клиента во всех указанных инбаундах."""
     api = XUIAPI()
     try:

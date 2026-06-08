@@ -1,13 +1,13 @@
 import os
+
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Dict
 
 load_dotenv()
 
 class Config(BaseModel):
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    ADMINS: List[int] = Field(default_factory=list)
+    ADMINS: list[int] = Field(default_factory=list)
     XUI_API_URL: str = os.getenv("XUI_API_URL", "http://localhost:54321")
     XUI_BASE_PATH: str = os.getenv("XUI_BASE_PATH", "/panel")
     XUI_SUB_PORT: str = os.getenv("XUI_SUB_PORT", "54321")
@@ -32,7 +32,7 @@ class Config(BaseModel):
     )
 
     # Настройки цен и скидок
-    PRICES: Dict[int, Dict[str, int]] = {
+    PRICES: dict[int, dict[str, int]] = {
         1: {"base_price": 100, "discount_percent": 0},
         3: {"base_price": 300, "discount_percent": 10},
         6: {"base_price": 600, "discount_percent": 20},

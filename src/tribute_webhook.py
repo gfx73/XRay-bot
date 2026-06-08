@@ -1,19 +1,18 @@
-import hmac
 import hashlib
+import hmac
 import json
 import logging
-from datetime import datetime, timedelta
 
 from aiogram import Bot
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from config import config
-from database import Session, User, get_user, create_user, update_subscription
+from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     create_client,
-    update_client_expiry,
     get_safe_expiry_timestamp,
     safe_json_loads,
+    update_client_expiry,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,16 +75,15 @@ async def _sync_profiles(telegram_id: int, tier: str, bot: Bot) -> None:
             if new_wl:
                 profiles_to_save["wl"] = new_wl
 
+    # premium без premium inbounds — только standard
+    elif "standard" in existing:
+        await update_client_expiry(existing["standard"]["email"], std_expiry)
+        profiles_to_save["standard"] = existing["standard"]
     else:
-        # premium без premium inbounds — только standard
-        if "standard" in existing:
-            await update_client_expiry(existing["standard"]["email"], std_expiry)
-            profiles_to_save["standard"] = existing["standard"]
-        else:
-            basic_cfgs = config.get_inbound_configs("basic")
-            new_std = await create_client(telegram_id, std_expiry, basic_cfgs)
-            if new_std:
-                profiles_to_save["standard"] = new_std
+        basic_cfgs = config.get_inbound_configs("basic")
+        new_std = await create_client(telegram_id, std_expiry, basic_cfgs)
+        if new_std:
+            profiles_to_save["standard"] = new_std
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()

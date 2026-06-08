@@ -1,17 +1,25 @@
-import os
-import json
 import asyncio
+import json
 import logging
+import os
 import warnings
+from datetime import datetime, timedelta
+
 import coloredlogs
 import uvicorn
-from config import config
 from aiogram import Bot, Dispatcher
 from aiogram.types import PreCheckoutQuery
-from handlers import setup_handlers
-from datetime import datetime, timedelta
+
+from config import config
+from database import (
+    Session,
+    User,
+    get_all_users,
+    init_db,
+    validate_and_fix_subscription_date,
+)
 from functions import delete_client_by_email
-from database import Session, User, init_db, get_all_users, delete_user_profile, validate_and_fix_subscription_date
+from handlers import setup_handlers
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -139,8 +147,9 @@ async def send_daily_backup(bot: Bot):
     while True:
         await asyncio.sleep(86400)
         try:
-            from database import engine
             from aiogram.types import BufferedInputFile
+
+            from database import engine
             db_path = os.path.abspath(engine.url.database)
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
             filename = f"users_{date_str}.db"
