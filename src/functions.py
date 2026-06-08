@@ -310,9 +310,31 @@ class XUIAPI:
 
         expiry_ms = final_expiry * 1000
 
+        # Fetch current client — server replaces the full row, not patches
+        try:
+            get_url = f"{self._api_base()}/api/clients/get/{email}"
+            async with self.session.get(get_url) as resp:
+                if resp.status != 200:
+                    logger.error(f"🛑 Get client failed: status={resp.status}")
+                    return False
+                data = await resp.json()
+                if not data.get("success"):
+                    logger.error(f"🛑 Get client failed for {email}: {data.get('msg')}")
+                    return False
+                current_client = data.get("obj")
+        except Exception as e:
+            logger.exception(f"🛑 Get client error: {e}")
+            return False
+
+        if not current_client:
+            logger.error(f"🛑 update_client_expiry: client {email!r} not found")
+            return False
+
+        payload = {**current_client, "expiryTime": expiry_ms, "enable": True}
+
         try:
             url = f"{self._api_base()}/api/clients/update/{email}"
-            async with self.session.post(url, json={"email": email, "expiryTime": expiry_ms, "enable": True}) as resp:
+            async with self.session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     logger.error(f"🛑 Update client expiry failed: status={resp.status}")
                     return False
