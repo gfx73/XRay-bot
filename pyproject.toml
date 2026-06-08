@@ -22,6 +22,7 @@ dependencies = [
   "pillow>=12.2.0",
   "qrcode>=8.2",
   "colorlog>=6.9.0",
+  "coloredlogs>=15.0.1",
 ]
 
 [tool.setuptools]
