@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -5,7 +7,11 @@ from models import SubscriptionTier
 
 
 class Config(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     BOT_TOKEN: str
     ADMINS: list[int] = Field(default_factory=list)
