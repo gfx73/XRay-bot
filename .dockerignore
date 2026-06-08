@@ -1,0 +1,10 @@
+.venv/
+.git/
+.ruff_cache/
+.idea/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.egg-info/
+src/*.egg-info/
+users.db
