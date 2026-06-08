@@ -6,8 +6,4 @@ services:
       - ./src:/app/src
       - ./users.db:/app/users.db
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # Uncomment to expose Tribute webhook (TRIBUTE_WEBHOOK_PORT in .env, default 8081):
-    ports:
-      - "${TRIBUTE_WEBHOOK_PORT:-8081}:${TRIBUTE_WEBHOOK_PORT:-8081}"
+    network_mode: host
