@@ -113,6 +113,7 @@ class XUIAPI:
         inbound_cfgs: list[dict],
         email_suffix: str = "",
         traffic_limit_gb: int = 0,
+        ip_limit: int = 0,
     ) -> ProfileSlot | None:
         """Создаёт клиента во всех указанных инбаундах одним запросом.
 
@@ -147,7 +148,7 @@ class XUIAPI:
                 "flow": flow,
                 "expiryTime": expiry_ms,
                 "enable": True,
-                "limitIp": 0,
+                "limitIp": ip_limit,
                 "totalGB": traffic_limit_gb * 1024 ** 3,
                 "tgId": 0,
                 "reset": 0,
@@ -411,11 +412,12 @@ async def create_client(
     inbound_cfgs: list[dict],
     email_suffix: str = "",
     traffic_limit_gb: int = 0,
+    ip_limit: int = 0,
 ) -> ProfileSlot | None:
     """Создаёт клиента во всех указанных инбаундах."""
     api = XUIAPI()
     try:
-        return await api.create_client(telegram_id, expiry_time, inbound_cfgs, email_suffix, traffic_limit_gb)
+        return await api.create_client(telegram_id, expiry_time, inbound_cfgs, email_suffix, traffic_limit_gb, ip_limit)
     finally:
         await api.close()
 
@@ -489,7 +491,11 @@ async def _sync_standard_slot(telegram_id: int, std_expiry: int, existing: UserP
     if existing.standard is not None:
         await update_client_expiry(existing.standard.email, std_expiry)
         return existing.standard
-    return await create_client(telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD))
+    return await create_client(
+        telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD),
+        traffic_limit_gb=config.STANDARD_TRAFFIC_LIMIT_GB,
+        ip_limit=config.STANDARD_IP_LIMIT,
+    )
 
 
 async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: UserProfiles) -> ProfileSlot | None:
@@ -501,6 +507,7 @@ async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: UserProfil
         telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
         email_suffix=f"_{SlotName.WL.value}",
         traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+        ip_limit=config.PREMIUM_IP_LIMIT,
     )
 
 

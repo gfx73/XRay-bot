@@ -24,6 +24,12 @@ class Config(BaseModel):
 
     # Лимит трафика для wl-клиента premium (в ГБ), 0 = безлимит
     PREMIUM_TRAFFIC_LIMIT_GB: int = Field(default=int(os.getenv("PREMIUM_TRAFFIC_LIMIT_GB", "0")))
+    # Лимит трафика для standard-клиента (в ГБ), 0 = безлимит
+    STANDARD_TRAFFIC_LIMIT_GB: int = Field(default=int(os.getenv("STANDARD_TRAFFIC_LIMIT_GB", "0")))
+    # Лимит одновременных IP для standard-клиента, 0 = безлимит
+    STANDARD_IP_LIMIT: int = Field(default=int(os.getenv("STANDARD_IP_LIMIT", "0")))
+    # Лимит одновременных IP для premium/wl-клиента, 0 = безлимит
+    PREMIUM_IP_LIMIT: int = Field(default=int(os.getenv("PREMIUM_IP_LIMIT", "0")))
 
     TRIAL_DAYS: int = Field(default=int(os.getenv("TRIAL_DAYS", "3")))
     TRIAL_TIER: str = os.getenv("TRIAL_TIER", "standard")

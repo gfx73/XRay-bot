@@ -126,7 +126,9 @@ async def _create_client_for_tier(
 
     if std_expiry > 0:
         standard_profile = await create_client(
-            telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD)
+            telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD),
+            traffic_limit_gb=config.STANDARD_TRAFFIC_LIMIT_GB,
+            ip_limit=config.STANDARD_IP_LIMIT,
         )
         if standard_profile:
             result.standard = standard_profile
@@ -138,6 +140,7 @@ async def _create_client_for_tier(
             telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
             email_suffix=f"_{SlotName.WL.value}",
             traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
+            ip_limit=config.PREMIUM_IP_LIMIT,
         )
         if wl_profile:
             result.wl = wl_profile
