@@ -750,10 +750,34 @@ async def admin_menu(callback: CallbackQuery):
     builder.button(text="📊 Статистика исп. сети", callback_data="admin_network_stats")
     builder.button(text="🔧 Исправить профили", callback_data="admin_fix_profiles")
     builder.button(text="📢 Рассылка", callback_data="admin_send_message")
+    builder.button(text="💾 Бэкап БД", callback_data="admin_backup_db")
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
-    builder.adjust(2, 1, 1, 1, 1, 1, 1, 1)
+    builder.adjust(2, 1, 1, 1, 1, 1, 1, 1, 1)
 
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode='Markdown')
+
+
+@router.callback_query(F.data == "admin_backup_db")
+async def admin_backup_db(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
+
+    import os
+    from database import engine
+    db_path = os.path.abspath(engine.url.database)
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    filename = f"users_{date_str}.db"
+
+    with open(db_path, "rb") as f:
+        data = f.read()
+
+    await callback.message.answer_document(
+        BufferedInputFile(data, filename=filename),
+        caption=f"💾 Бэкап базы данных ({date_str})"
+    )
 
 
 @router.callback_query(F.data == "admin_add_time")

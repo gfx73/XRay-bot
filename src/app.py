@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 import logging
@@ -133,6 +134,32 @@ async def _check_user_subscription(bot, user, now: datetime):
             except Exception as e:
                 logger.warning(f"⚠️ Notification error: {e}")
 
+async def send_daily_backup(bot: Bot):
+    """Ежедневно отправляет бэкап БД всем администраторам."""
+    while True:
+        await asyncio.sleep(86400)
+        try:
+            from database import engine
+            from aiogram.types import BufferedInputFile
+            db_path = os.path.abspath(engine.url.database)
+            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            filename = f"users_{date_str}.db"
+            with open(db_path, "rb") as f:
+                data = f.read()
+            doc = BufferedInputFile(data, filename=filename)
+            for admin_id in config.ADMINS:
+                try:
+                    await bot.send_document(
+                        admin_id,
+                        doc,
+                        caption=f"💾 Ежедневный бэкап БД ({date_str})"
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to send backup to admin {admin_id}: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Daily backup error: {e}")
+
+
 async def update_admins_status():
     """Обновляет статус администраторов в базе данных."""
     with Session() as session:
@@ -202,7 +229,10 @@ async def main():
         await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
     server = None
-    other_tasks = [asyncio.create_task(check_subscriptions(bot))]
+    other_tasks = [
+        asyncio.create_task(check_subscriptions(bot)),
+        asyncio.create_task(send_daily_backup(bot)),
+    ]
 
     if config.TRIBUTE_API_KEY:
         from tribute_webhook import create_tribute_app
