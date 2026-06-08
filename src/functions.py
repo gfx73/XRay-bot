@@ -405,7 +405,7 @@ class XUIAPI:
             inbound = await self.get_inbound(inbound_id)
             if not inbound:
                 return None
-            settings = json.loads(inbound["settings"])
+            settings = inbound["settings"] if isinstance(inbound["settings"], dict) else json.loads(inbound["settings"])
             clients = settings.get("clients", [])
             logger.info(f"📋 Retrieved {len(clients)} clients from inbound {inbound_id}")
             return clients
