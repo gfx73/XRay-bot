@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import io
-import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -21,6 +20,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import config
+from models import SlotName, SubscriptionTier, UserProfiles
 from database import (
     Session,
     StaticProfile,
@@ -50,7 +50,6 @@ from functions import (
     get_online_users,
     get_safe_expiry_timestamp,
     get_user_stats,
-    safe_json_loads,
     sync_profiles_for_tier,
     update_client_expiry,
 )
@@ -62,8 +61,8 @@ router = Router()
 MAX_MESSAGE_LENGTH = 4096
 
 TIER_LABELS = {
-    "basic": "📦 Basic",
-    "premium": "⭐ Premium",
+    SubscriptionTier.STANDARD: "📦 Standard",
+    SubscriptionTier.PREMIUM: "⭐ Premium",
 }
 
 
@@ -101,18 +100,12 @@ def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
 # Вспомогательные функции
 # ────────────────────────────────────────────────────────────
 
-def _get_profiles(user) -> dict:
-    """Возвращает {'standard': ..., 'wl': ...} или {}."""
-    p = safe_json_loads(user.profiles_data, default=None)
-    if not p or not isinstance(p, dict):
-        return {}
-    if "standard" not in p and "wl" not in p:
-        return {}
-    return p
+def _get_profiles(user) -> UserProfiles:
+    return user.profiles
 
 
 def _has_profiles(user) -> bool:
-    return bool(_get_profiles(user))
+    return bool(user.profiles)
 
 
 def _is_subscription_active(user) -> bool:
@@ -123,33 +116,35 @@ def _is_subscription_active(user) -> bool:
     )
 
 
-async def _create_client_for_tier(telegram_id: int, subscription_end, tier: str, premium_end=None) -> dict:
+async def _create_client_for_tier(
+    telegram_id: int, subscription_end, tier: SubscriptionTier, premium_end=None
+) -> UserProfiles:
     """Создаёт VPN-клиентов: standard c expiry из subscription_end, wl — из premium_end."""
     std_expiry = get_safe_expiry_timestamp(subscription_end)
     prem_expiry = get_safe_expiry_timestamp(premium_end)
-    profiles = {}
+    result = UserProfiles()
 
     if std_expiry > 0:
-        basic_cfgs = config.get_inbound_configs("basic")
-        standard_profile = await create_client(telegram_id, std_expiry, basic_cfgs)
+        standard_profile = await create_client(
+            telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD)
+        )
         if standard_profile:
-            profiles["standard"] = standard_profile
+            result.standard = standard_profile
         else:
             logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
 
-    if tier == "premium" and config.has_premium_inbounds() and prem_expiry > 0:
-        premium_cfgs = config.get_inbound_configs("premium")
+    if tier == SubscriptionTier.PREMIUM and config.has_premium_inbounds() and prem_expiry > 0:
         wl_profile = await create_client(
-            telegram_id, prem_expiry, premium_cfgs,
-            email_suffix="_wl",
+            telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
+            email_suffix=f"_{SlotName.WL.value}",
             traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
         )
         if wl_profile:
-            profiles["wl"] = wl_profile
+            result.wl = wl_profile
         else:
             logger.error(f"🛑 Failed to create wl client for user {telegram_id}")
 
-    return profiles
+    return result
 
 
 async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
@@ -168,8 +163,8 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
         expire_date = user.subscription_end.strftime("%d-%m-%Y %H:%M")
     else:
         expire_date = status
-    tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
-    tier_label = TIER_LABELS.get(tier, tier)
+    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
+    tier_label = TIER_LABELS.get(tier, tier.value)
 
     text = (
         f"**Имя профиля**: `{user.full_name}`\n"
@@ -287,10 +282,10 @@ def _build_renew_keyboard():
     tribute_basic_url = config.TRIBUTE_BASIC_URL
     tribute_premium_url = config.TRIBUTE_PREMIUM_URL
 
-    def _add_tier(tier: str, tribute_url: str) -> None:
+    def _add_tier(tier: SubscriptionTier, tribute_url: str) -> None:
         if not has_tg and not tribute_url:
             return
-        label = "Standard" if tier == "basic" else "Premium"
+        label = TIER_LABELS[tier]
         if has_tg:
             for months in sorted(config.PRICES.keys()):
                 price = config.calculate_price(months, tier)
@@ -298,14 +293,14 @@ def _build_renew_keyboard():
                 disc_text = f" (-{disc}%)" if disc else ""
                 builder.button(
                     text=f"{months} мес. — {price} руб.{disc_text}",
-                    callback_data=f"pay_{tier}_{months}",
+                    callback_data=f"pay_{tier.value}_{months}",
                 )
         if tribute_url:
             builder.button(text=f"💳 Оплатить {label} через Tribute →", url=tribute_url)
 
-    _add_tier("basic", tribute_basic_url)
+    _add_tier(SubscriptionTier.STANDARD, tribute_basic_url)
     if has_premium:
-        _add_tier("premium", tribute_premium_url)
+        _add_tier(SubscriptionTier.PREMIUM, tribute_premium_url)
 
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     builder.adjust(1)
@@ -323,7 +318,7 @@ async def connect_cmd(message: Message, bot: Bot):
         await message.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
-    tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
+    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
 
     if not _has_profiles(user):
         await message.answer("⚙️ Создаём ваш VPN профиль...")
@@ -335,7 +330,7 @@ async def connect_cmd(message: Message, bot: Bot):
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
-                    db_user.profiles_data = json.dumps(new_profiles)
+                    db_user.profiles = new_profiles
                     session.commit()
             user = await get_user(user.telegram_id)
         else:
@@ -368,9 +363,9 @@ async def stats_cmd(message: Message, bot: Bot):
     await message.answer("⚙️ Загружаем вашу статистику...")
 
     lines = ["📊 **Ваша статистика:**\n"]
-    for slot, profile in profiles.items():
-        stats = await get_user_stats(profile["email"])
-        label = "🔒 Standart" if slot == "standard" else "⚡ Whitelist"
+    for slot, profile in profiles.slots().items():
+        stats = await get_user_stats(profile.email)
+        label = "🔒 Standart" if slot == SlotName.STANDARD else "⚡ Whitelist"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -451,7 +446,11 @@ async def process_payment(callback: CallbackQuery, bot: Bot):
         if len(parts) != 3:
             await callback.message.answer("❌ Неверный формат кнопки оплаты")
             return
-        tier = parts[1]
+        try:
+            tier = SubscriptionTier(parts[1])
+        except ValueError:
+            await callback.message.answer("❌ Неверный тариф")
+            return
         months = int(parts[2])
 
         if months not in config.PRICES:
@@ -459,7 +458,7 @@ async def process_payment(callback: CallbackQuery, bot: Bot):
             return
 
         final_price = config.calculate_price(months, tier)
-        tier_label = TIER_LABELS.get(tier, tier)
+        tier_label = TIER_LABELS.get(tier, tier.value)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
 
         prices = [LabeledPrice(label=f"VPN {tier_label} на {months} мес.", amount=final_price * 100)]
@@ -488,12 +487,16 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot: 
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 
-def _parse_payment_payload(payload: str) -> tuple[str, int] | None:
+def _parse_payment_payload(payload: str) -> tuple[SubscriptionTier, int] | None:
     if not payload.startswith("subscription_"):
         return None
     parts = payload[len("subscription_"):].split("_")
-    if len(parts) == 2 and parts[0] in ("basic", "premium"):
-        return parts[0], int(parts[1])
+    if len(parts) == 2:
+        try:
+            tier = SubscriptionTier(parts[0])
+            return tier, int(parts[1])
+        except (ValueError, KeyError):
+            pass
     return None
 
 
@@ -507,7 +510,7 @@ async def process_successful_payment(message: Message, bot: Bot):
         tier, months = parsed
 
         final_price = config.calculate_price(months, tier)
-        tier_label = TIER_LABELS.get(tier, tier)
+        tier_label = TIER_LABELS.get(tier, tier.value)
 
         user = await get_user(message.from_user.id)
         if not user:
@@ -515,7 +518,7 @@ async def process_successful_payment(message: Message, bot: Bot):
             return
 
         now = datetime.utcnow()
-        if tier == "premium":
+        if tier == SubscriptionTier.PREMIUM:
             action_type = "продлена" if (getattr(user, 'premium_end', None) and user.premium_end > now) else "куплена"
         else:
             action_type = "продлена" if user.subscription_end > now else "куплена"
@@ -539,7 +542,7 @@ async def process_successful_payment(message: Message, bot: Bot):
         with Session() as session:
             db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
             if db_user:
-                db_user.profiles_data = json.dumps(profiles_to_save)
+                db_user.profiles = profiles_to_save
                 session.commit()
 
         await message.answer(
@@ -575,7 +578,7 @@ async def connect_profile(callback: CallbackQuery):
         await callback.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
-    tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
+    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
 
     if not _has_profiles(user):
         await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
@@ -587,7 +590,7 @@ async def connect_profile(callback: CallbackQuery):
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
-                    db_user.profiles_data = json.dumps(new_profiles)
+                    db_user.profiles = new_profiles
                     session.commit()
             user = await get_user(user.telegram_id)
         else:
@@ -602,31 +605,22 @@ async def connect_profile(callback: CallbackQuery):
     # Синхронизируем expiry в 3x-ui при каждом просмотре профиля — каждый слот по своей дате
     std_expiry = get_safe_expiry_timestamp(user.subscription_end)
     prem_expiry = get_safe_expiry_timestamp(getattr(user, 'premium_end', None))
-    if std_expiry > 0 and "standard" in profiles:
-        await update_client_expiry(profiles["standard"]["email"], std_expiry)
-    if prem_expiry > 0 and "wl" in profiles:
-        await update_client_expiry(profiles["wl"]["email"], prem_expiry)
+    if std_expiry > 0 and profiles.standard is not None:
+        await update_client_expiry(profiles.standard.email, std_expiry)
+    if prem_expiry > 0 and profiles.wl is not None:
+        await update_client_expiry(profiles.wl.email, prem_expiry)
 
     await _send_profile_message(callback.message, user, profiles, edit=True, delete_after=True)
 
 
-async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: bool = False, delete_after: bool = False):
-    """Отправляет сообщение с QR-кодом и ссылками подключения.
-    profiles — {'standard': {...}, 'wl': {...}}
-    """
+async def _send_profile_message(msg_or_callback, user, profiles: UserProfiles, edit: bool = False, delete_after: bool = False):
+    """Отправляет сообщение с QR-кодом и ссылками подключения."""
     builder = InlineKeyboardBuilder()
 
-    for slot in ("standard", "wl"):
-        profile = profiles.get(slot)
-        if not profile:
-            continue
-        sub_id = profile.get("sub_id")
-        if not sub_id:
-            continue
-        sub_url = generate_sub_url(sub_id)
+    for slot, profile in profiles.slots().items():
+        sub_url = generate_sub_url(profile.sub_id)
         full_sub_url = sub_url if sub_url.startswith(("http://", "https://")) else "https://" + sub_url
-
-        btn_text = "🔒 Подключиться (Standart)" if slot == "standard" else "⚡ Подключиться (Whitelist)"
+        btn_text = "🔒 Подключиться (Standart)" if slot == SlotName.STANDARD else "⚡ Подключиться (Whitelist)"
         builder.button(text=btn_text, url=full_sub_url)
 
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
@@ -646,8 +640,7 @@ async def _send_profile_message(msg_or_callback, user, profiles: dict, edit: boo
     )
 
     # QR-код от standard-профиля
-    standard = profiles.get("standard", {})
-    std_sub_id = standard.get("sub_id") if standard else None
+    std_sub_id = profiles.standard.sub_id if profiles.standard is not None else None
     if std_sub_id:
         std_sub_url = generate_sub_url(std_sub_id)
         qr_data = std_sub_url if std_sub_url.startswith(("http://", "https://")) else "https://" + std_sub_url
@@ -687,9 +680,9 @@ async def user_stats(callback: CallbackQuery):
     await callback.message.edit_text("⚙️ Загружаем вашу статистику...")
 
     lines = ["📊 **Ваша статистика:**\n"]
-    for slot, profile in profiles.items():
-        stats = await get_user_stats(profile["email"])
-        label = "🔒 Reality" if slot == "standard" else "⚡ Whitelist"
+    for slot, profile in profiles.slots().items():
+        stats = await get_user_stats(profile.email)
+        label = "🔒 Reality" if slot == SlotName.STANDARD else "⚡ Whitelist"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -806,17 +799,14 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
                     user.subscription_end = datetime.utcnow() + timedelta(seconds=total_seconds)
                 session.commit()
 
-                profiles = safe_json_loads(user.profiles_data, {})
-                if isinstance(profiles, dict) and "standard" in profiles:
+                up = user.profiles
+                if up.standard is not None:
                     expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                    std_profile = profiles.get("standard", {})
-                    email = std_profile.get("email") if isinstance(std_profile, dict) else None
-                    if email:
-                        try:
-                            await update_client_expiry(email, expiry_time)
-                            logger.info(f"✅ Updated expiry for {email} (admin add time)")
-                        except Exception as e:
-                            logger.error(f"🛑 Failed to update expiry for {email}: {e}")
+                    try:
+                        await update_client_expiry(up.standard.email, expiry_time)
+                        logger.info(f"✅ Updated expiry for {up.standard.email} (admin add time)")
+                    except Exception as e:
+                        logger.error(f"🛑 Failed to update expiry for {up.standard.email}: {e}")
 
                 await message.answer(f"✅ Добавлено время пользователю {user_id}")
             else:
@@ -872,17 +862,14 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
                 user.subscription_end = new_end
                 session.commit()
 
-                profiles = safe_json_loads(user.profiles_data, {})
-                if isinstance(profiles, dict) and "standard" in profiles:
+                up = user.profiles
+                if up.standard is not None:
                     expiry_time = get_safe_expiry_timestamp(user.subscription_end)
-                    std_profile = profiles.get("standard", {})
-                    email = std_profile.get("email") if isinstance(std_profile, dict) else None
-                    if email:
-                        try:
-                            await update_client_expiry(email, expiry_time)
-                            logger.info(f"✅ Updated expiry for {email} (admin remove time)")
-                        except Exception as e:
-                            logger.error(f"🛑 Failed to update expiry for {email}: {e}")
+                    try:
+                        await update_client_expiry(up.standard.email, expiry_time)
+                        logger.info(f"✅ Updated expiry for {up.standard.email} (admin remove time)")
+                    except Exception as e:
+                        logger.error(f"🛑 Failed to update expiry for {up.standard.email}: {e}")
 
                 await message.answer(f"✅ Удалено время у пользователя {user_id}")
             else:
@@ -916,8 +903,8 @@ async def handle_user_list_active(callback: CallbackQuery):
     for user in users:
         expire_date = user.subscription_end.strftime("%d.%m.%Y %H:%M")
         username = f"@{user.username}" if user.username else "none"
-        tier = getattr(user, 'subscription_tier', 'basic') or 'basic'
-        user_line = f"• {user.full_name} ({username} | <code>{user.telegram_id}</code>) [{tier}] — до <code>{expire_date}</code>\n"
+        tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
+        user_line = f"• {user.full_name} ({username} | <code>{user.telegram_id}</code>) [{tier.value}] — до <code>{expire_date}</code>\n"
         if len(text) + len(user_line) > MAX_MESSAGE_LENGTH:
             await callback.message.answer(text, parse_mode="HTML")
             text = "👤 <b>Продолжение:</b>\n\n"
@@ -1123,21 +1110,16 @@ async def admin_fix_profiles(callback: CallbackQuery):
 
         success_count = fail_count = 0
         for user in users:
-            profiles = safe_json_loads(user.profiles_data, {})
-            if not isinstance(profiles, dict) or "standard" not in profiles:
-                continue
-            for slot_profile in profiles.values():
-                email = slot_profile.get("email") if isinstance(slot_profile, dict) else None
-                if email:
-                    try:
-                        result = await force_update_profile_expiry(email, user.subscription_end)
-                        if result:
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                    except Exception as e:
-                        logger.error(f"🛑 Error fixing profile {email}: {e}")
+            for slot_profile in user.profiles.slots().values():
+                try:
+                    result = await force_update_profile_expiry(slot_profile.email, user.subscription_end)
+                    if result:
+                        success_count += 1
+                    else:
                         fail_count += 1
+                except Exception as e:
+                    logger.error(f"🛑 Error fixing profile {slot_profile.email}: {e}")
+                    fail_count += 1
 
         text = (
             f"🔧 **Исправление профилей завершено:**\n\n"

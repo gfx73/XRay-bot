@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import datetime, timedelta
 
@@ -6,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum as SaEnum,
     Integer,
     String,
     Text,
@@ -17,6 +17,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import config
 from functions import delete_client_by_email
+from models import SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,22 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     notified = Column(Boolean, default=False)
     premium_notified = Column(Boolean, default=False)
-    # ── Новые поля ──────────────────────────────────────────
-    subscription_tier = Column(String, default="basic")   # "basic" | "premium"
-    profiles_data = Column(Text, nullable=True)            # JSON: {inbound_id: profile_data}
+    subscription_tier = Column(SaEnum(SubscriptionTier), default=SubscriptionTier.STANDARD)
+    profiles_data = Column(Text, nullable=True)
+
+    @property
+    def profiles(self) -> UserProfiles:
+        if not self.profiles_data:
+            return UserProfiles()
+        try:
+            return UserProfiles.model_validate_json(self.profiles_data)
+        except Exception:
+            logger.warning(f"profiles_data parse failed for telegram_id={self.telegram_id}")
+            return UserProfiles()
+
+    @profiles.setter
+    def profiles(self, value: UserProfiles) -> None:
+        self.profiles_data = value.model_dump_json(exclude_none=True)
 
 class StaticProfile(Base):
     __tablename__ = 'static_profiles'
@@ -74,7 +88,7 @@ async def create_user(telegram_id: int, full_name: str, username: str | None = N
             username=username,
             subscription_end=subscription_end,
             is_admin=is_admin,
-            subscription_tier=config.TRIAL_TIER,
+            subscription_tier=SubscriptionTier(config.TRIAL_TIER),
         )
         session.add(user)
         session.commit()
@@ -102,7 +116,7 @@ async def update_subscription(telegram_id: int, months: int, tier: str | None = 
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
             now = datetime.utcnow()
-            if tier == "premium":
+            if tier == SubscriptionTier.PREMIUM:
                 # subscription_end считается от текущего subscription_end (если активен)
                 user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
                 if user.subscription_end > now:
@@ -130,7 +144,7 @@ async def update_subscription(telegram_id: int, months: int, tier: str | None = 
                 user.notified = False
             # Derive tier from currently active subscriptions
             has_active_premium = bool(user.premium_end and user.premium_end > now)
-            user.subscription_tier = "premium" if has_active_premium else "basic"
+            user.subscription_tier = SubscriptionTier.PREMIUM if has_active_premium else SubscriptionTier.STANDARD
             session.commit()
             logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, tier={tier}, "
                         f"subscription_end={user.subscription_end}, premium_end={user.premium_end}")
@@ -206,15 +220,10 @@ async def delete_user(telegram_id: int) -> bool:
         emails_to_delete: set = set()
         if user.profiles_data:
             try:
-                profiles = json.loads(user.profiles_data)
-                if isinstance(profiles, dict) and "standard" in profiles:
-                    for slot_profile in profiles.values():
-                        if isinstance(slot_profile, dict):
-                            email = slot_profile.get("email")
-                            if email:
-                                emails_to_delete.add(email)
+                for slot in user.profiles.slots().values():
+                    emails_to_delete.add(slot.email)
             except Exception as e:
-                logger.error(f"🛑 Error parsing profiles_data for user {telegram_id}: {e}")
+                logger.error(f"🛑 Error parsing profiles for user {telegram_id}: {e}")
 
         for email in emails_to_delete:
             try:

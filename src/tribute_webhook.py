@@ -11,9 +11,9 @@ from config import config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,
-    safe_json_loads,
     sync_profiles_for_tier,
 )
+from models import SubscriptionTier
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 }
 
 
-async def _sync_profiles(telegram_id: int, tier: str) -> None:
+async def _sync_profiles(telegram_id: int, tier: SubscriptionTier) -> None:
     """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки."""
     updated_user = await get_user(telegram_id)
     if not updated_user:
@@ -32,24 +32,21 @@ async def _sync_profiles(telegram_id: int, tier: str) -> None:
 
     std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
     prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
-
-    existing = safe_json_loads(updated_user.profiles_data, default={})
-    if not isinstance(existing, dict):
-        existing = {}
+    existing = updated_user.profiles
 
     profiles_to_save = await sync_profiles_for_tier(telegram_id, tier, std_expiry, prem_expiry, existing)
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if db_user:
-            db_user.profiles_data = json.dumps(profiles_to_save)
+            db_user.profiles = profiles_to_save
             session.commit()
 
 
-def _resolve_tier(subscription_name: str) -> str:
+def _resolve_tier(subscription_name: str) -> SubscriptionTier:
     if subscription_name == config.TRIBUTE_PREMIUM_PLAN_NAME:
-        return "premium"
-    return "basic"
+        return SubscriptionTier.PREMIUM
+    return SubscriptionTier.STANDARD
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
@@ -73,7 +70,7 @@ async def _handle_subscription_event(
     """Handle newSubscription and renewedSubscription events."""
     tier = _resolve_tier(payload.get("subscription_name", ""))
     months = PERIOD_TO_MONTHS.get(payload.get("period", "monthly"), 1)
-    tier_label = "⭐ Premium" if tier == "premium" else "📦 Basic"
+    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
     suffix = _months_suffix(months)
 
     user = await get_user(telegram_id)

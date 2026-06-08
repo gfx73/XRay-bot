@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from config import config
+from models import InboundMeta, ProfileSlot, SlotName, SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ class XUIAPI:
         inbound_cfgs: list[dict],
         email_suffix: str = "",
         traffic_limit_gb: int = 0,
-    ) -> dict | None:
+    ) -> ProfileSlot | None:
         """Создаёт клиента во всех указанных инбаундах одним запросом.
 
         Args:
@@ -172,17 +173,17 @@ class XUIAPI:
 
         inbounds_meta = await self._collect_inbound_meta(inbound_cfgs)
         logger.info(f"✅ Client created: {email} in inbounds {inbound_ids}")
-        return {
-            "email": email,
-            "uuid": client_id,
-            "sub_id": sub_id,
-            "inbound_ids": inbound_ids,
-            "inbounds": inbounds_meta,
-        }
+        return ProfileSlot(
+            email=email,
+            uuid=client_id,
+            sub_id=sub_id,
+            inbound_ids=inbound_ids,
+            inbounds={k: InboundMeta(**v) for k, v in inbounds_meta.items()},
+        )
 
     async def create_static_client(self, profile_name: str):  # noqa: PLR0911
         """Создаёт статический клиент в первом Basic-инбаунде."""
-        basic_configs = config.get_inbound_configs("basic")
+        basic_configs = config.get_inbound_configs(SubscriptionTier.STANDARD)
         if not basic_configs:
             logger.error("🛑 No basic inbounds configured for static client")
             return None
@@ -410,7 +411,7 @@ async def create_client(
     inbound_cfgs: list[dict],
     email_suffix: str = "",
     traffic_limit_gb: int = 0,
-) -> dict | None:
+) -> ProfileSlot | None:
     """Создаёт клиента во всех указанных инбаундах."""
     api = XUIAPI()
     try:
@@ -448,7 +449,7 @@ async def update_client_expiry(email: str, expiry_time: int):
 async def get_global_stats():
     """Агрегирует статистику по всем сконфигурированным инбаундам."""
     all_inbound_ids: set[int] = set()
-    for tier in ("basic", "premium"):
+    for tier in SubscriptionTier:
         for cfg in config.get_inbound_configs(tier):
             all_inbound_ids.add(cfg["id"])
     api = XUIAPI()
@@ -483,55 +484,53 @@ async def get_user_stats(email: str):
 # URL-генерация
 # ──────────────────────────────────────────────────────────────
 
-async def _sync_standard_slot(telegram_id: int, std_expiry: int, existing: dict) -> dict | None:
+async def _sync_standard_slot(telegram_id: int, std_expiry: int, existing: UserProfiles) -> ProfileSlot | None:
     """Update expiry for existing standard client or create a new one."""
-    if "standard" in existing:
-        await update_client_expiry(existing["standard"]["email"], std_expiry)
-        return existing["standard"]
-    basic_cfgs = config.get_inbound_configs("basic")
-    return await create_client(telegram_id, std_expiry, basic_cfgs)
+    if existing.standard is not None:
+        await update_client_expiry(existing.standard.email, std_expiry)
+        return existing.standard
+    return await create_client(telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD))
 
 
-async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: dict) -> dict | None:
+async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: UserProfiles) -> ProfileSlot | None:
     """Update expiry for existing wl client or create a new one."""
-    if "wl" in existing:
-        await update_client_expiry(existing["wl"]["email"], prem_expiry)
-        return existing["wl"]
-    premium_cfgs = config.get_inbound_configs("premium")
+    if existing.wl is not None:
+        await update_client_expiry(existing.wl.email, prem_expiry)
+        return existing.wl
     return await create_client(
-        telegram_id, prem_expiry, premium_cfgs,
-        email_suffix="_wl",
+        telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
+        email_suffix=f"_{SlotName.WL.value}",
         traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
     )
 
 
 async def sync_profiles_for_tier(
     telegram_id: int,
-    tier: str,
+    tier: SubscriptionTier,
     std_expiry: int,
     prem_expiry: int,
-    existing: dict,
-) -> dict:
+    existing: UserProfiles,
+) -> UserProfiles:
     """Sync VPN profiles after a subscription payment.
 
-    - basic: syncs standard slot, copies existing wl without updating its expiry.
+    - standard: syncs standard slot, copies existing wl without updating its expiry.
     - premium + premium inbounds: syncs both standard and wl slots.
     - premium without premium inbounds: syncs standard only (no wl).
     """
-    profiles: dict = {}
+    result = UserProfiles()
 
     std_slot = await _sync_standard_slot(telegram_id, std_expiry, existing)
     if std_slot:
-        profiles["standard"] = std_slot
+        result.standard = std_slot
 
-    if tier == "premium" and config.has_premium_inbounds():
+    if tier == SubscriptionTier.PREMIUM and config.has_premium_inbounds():
         wl_slot = await _sync_wl_slot(telegram_id, prem_expiry, existing)
         if wl_slot:
-            profiles["wl"] = wl_slot
-    elif tier == "basic" and "wl" in existing:
-        profiles["wl"] = existing["wl"]
+            result.wl = wl_slot
+    elif tier == SubscriptionTier.STANDARD and existing.wl is not None:
+        result.wl = existing.wl
 
-    return profiles
+    return result
 
 
 def generate_sub_url(sub_id: str) -> str:
@@ -644,18 +643,9 @@ def _build_email_user_map(users_db: list) -> dict[str, tuple]:
     for user in users_db:
         if not user.profiles_data:
             continue
-        try:
-            profiles = json.loads(user.profiles_data)
-            if not isinstance(profiles, dict) or "standard" not in profiles:
-                continue
-            for slot_profile in profiles.values():
-                if isinstance(slot_profile, dict):
-                    email = slot_profile.get("email")
-                    if email:
-                        first_iid = slot_profile.get("inbound_ids", [None])[0]
-                        users_map[email] = (user, first_iid)
-        except Exception as e:
-            logger.error(f"🛑 Error parsing profiles_data for user {user.telegram_id}: {e}")
+        for slot in user.profiles.slots().values():
+            first_iid = slot.inbound_ids[0] if slot.inbound_ids else None
+            users_map[slot.email] = (user, first_iid)
     return users_map
 
 
@@ -665,7 +655,7 @@ async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
     try:
         all_inbound_ids: set[int] = {
             cfg["id"]
-            for tier in ("basic", "premium")
+            for tier in SubscriptionTier
             for cfg in config.get_inbound_configs(tier)
         }
 

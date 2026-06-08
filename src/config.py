@@ -3,6 +3,8 @@ import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
+from models import SubscriptionTier
+
 load_dotenv()
 
 class Config(BaseModel):
@@ -24,7 +26,7 @@ class Config(BaseModel):
     PREMIUM_TRAFFIC_LIMIT_GB: int = Field(default=int(os.getenv("PREMIUM_TRAFFIC_LIMIT_GB", "0")))
 
     TRIAL_DAYS: int = Field(default=int(os.getenv("TRIAL_DAYS", "3")))
-    TRIAL_TIER: str = os.getenv("TRIAL_TIER", "basic")
+    TRIAL_TIER: str = os.getenv("TRIAL_TIER", "standard")
 
     # Коэффициент цены Premium = цена Basic * PREMIUM_PRICE_MULTIPLIER
     PREMIUM_PRICE_MULTIPLIER: float = Field(
@@ -75,12 +77,12 @@ class Config(BaseModel):
                 result.append({"id": int(part)})
         return result
 
-    def get_inbound_configs(self, tier: str) -> list[dict]:
+    def get_inbound_configs(self, tier: SubscriptionTier) -> list[dict]:
         """Возвращает список инбаундов для тарифа: [{"id": int, "protocol": str}, ...]."""
-        raw = self.PREMIUM_INBOUNDS if tier == "premium" else self.BASIC_INBOUNDS
+        raw = self.PREMIUM_INBOUNDS if tier == SubscriptionTier.PREMIUM else self.BASIC_INBOUNDS
         return self._parse_inbound_configs_raw(raw)
 
-    def calculate_price(self, months: int, tier: str = "basic") -> int:
+    def calculate_price(self, months: int, tier: SubscriptionTier = SubscriptionTier.STANDARD) -> int:
         """Вычисляет итоговую стоимость с учётом скидки и тарифа."""
         if months not in self.PRICES:
             return 0
@@ -89,7 +91,7 @@ class Config(BaseModel):
         discount_percent = price_info["discount_percent"]
         discount_amount = (base_price * discount_percent) // 100
         basic_price = base_price - discount_amount
-        if tier == "premium":
+        if tier == SubscriptionTier.PREMIUM:
             return int(basic_price * self.PREMIUM_PRICE_MULTIPLIER)
         return basic_price
 

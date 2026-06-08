@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -21,6 +20,7 @@ from database import (
     validate_and_fix_subscription_date,
 )
 from functions import delete_client_by_email
+from models import SlotName, SubscriptionTier, UserProfiles
 from handlers import setup_handlers
 from tribute_webhook import create_tribute_app
 
@@ -80,20 +80,23 @@ async def _send_expiry_notifications(bot, user, now: datetime, std_active: bool,
             logger.warning(f"⚠️ Notification error: {e}")
 
 
-async def _delete_profile_slot(profiles: dict, slot_key: str):
-    """Delete one expired VPN slot from profiles dict."""
-    profile = profiles.get(slot_key, {})
-    email = profile.get("email") if isinstance(profile, dict) else None
-    if email:
+async def _delete_profile_slot(profiles: UserProfiles, slot: SlotName) -> UserProfiles:
+    """Delete one expired VPN slot and return updated profiles."""
+    profile = profiles.standard if slot == SlotName.STANDARD else profiles.wl
+    if profile is not None:
         try:
-            success = await delete_client_by_email(email)
+            success = await delete_client_by_email(profile.email)
             if success:
-                logger.info(f"✅ Deleted expired {slot_key} client {email}")
+                logger.info(f"✅ Deleted expired {slot.value} client {profile.email}")
             else:
-                logger.warning(f"⚠️ Failed to delete {email}")
+                logger.warning(f"⚠️ Failed to delete {profile.email}")
         except Exception as e:
-            logger.warning(f"⚠️ Deletion error for {email}: {e}")
-    del profiles[slot_key]
+            logger.warning(f"⚠️ Deletion error for {profile.email}: {e}")
+    if slot == SlotName.STANDARD:
+        profiles.standard = None
+    else:
+        profiles.wl = None
+    return profiles
 
 
 async def _check_user_subscription(bot, user, now: datetime):
@@ -105,30 +108,23 @@ async def _check_user_subscription(bot, user, now: datetime):
     if not user.profiles_data:
         return
 
-    try:
-        profiles = json.loads(user.profiles_data)
-    except Exception:
-        return
-
-    if not isinstance(profiles, dict):
-        return
-
+    profiles = user.profiles
     changed = False
 
-    if not std_active and "standard" in profiles:
-        await _delete_profile_slot(profiles, "standard")
+    if not std_active and profiles.standard is not None:
+        profiles = await _delete_profile_slot(profiles, SlotName.STANDARD)
         changed = True
 
-    if not prem_active and "wl" in profiles:
-        await _delete_profile_slot(profiles, "wl")
+    if not prem_active and profiles.wl is not None:
+        profiles = await _delete_profile_slot(profiles, SlotName.WL)
         changed = True
 
     if changed:
         with Session() as session:
             db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
             if db_user:
-                db_user.subscription_tier = "premium" if prem_active else "basic"
-                db_user.profiles_data = json.dumps(profiles) if profiles else None
+                db_user.subscription_tier = SubscriptionTier.PREMIUM if prem_active else SubscriptionTier.STANDARD
+                db_user.profiles = profiles if profiles else UserProfiles()
                 session.commit()
 
         if not std_active and not prem_active:
@@ -181,7 +177,7 @@ async def update_admins_status():
                     subscription_end=validate_and_fix_subscription_date(
                         datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
                     ),
-                    subscription_tier=config.TRIAL_TIER,
+                    subscription_tier=SubscriptionTier(config.TRIAL_TIER),
                 )
                 session.add(new_admin)
         session.commit()
