@@ -583,6 +583,7 @@ async def connect_profile(callback: CallbackQuery):
 
     tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
 
+    is_new: bool = False
     if not _has_profiles(user):
         await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
         new_profiles = await _create_client_for_tier(
@@ -596,6 +597,7 @@ async def connect_profile(callback: CallbackQuery):
                     db_user.profiles = new_profiles
                     session.commit()
             user = await get_user(user.telegram_id)
+            is_new = True
         else:
             await callback.message.answer("🛑 Ошибка при создании профиля. Попробуйте позже.")
             return
@@ -606,12 +608,13 @@ async def connect_profile(callback: CallbackQuery):
         return
 
     # Синхронизируем expiry в 3x-ui при каждом просмотре профиля — каждый слот по своей дате
-    std_expiry = get_safe_expiry_timestamp(user.subscription_end)
-    prem_expiry = get_safe_expiry_timestamp(getattr(user, 'premium_end', None))
-    if std_expiry > 0 and profiles.standard is not None:
-        await update_client_expiry(profiles.standard.email, std_expiry)
-    if prem_expiry > 0 and profiles.wl is not None:
-        await update_client_expiry(profiles.wl.email, prem_expiry)
+    if not is_new:
+        std_expiry = get_safe_expiry_timestamp(user.subscription_end)
+        prem_expiry = get_safe_expiry_timestamp(getattr(user, 'premium_end', None))
+        if std_expiry > 0 and profiles.standard is not None:
+            await update_client_expiry(profiles.standard.email, std_expiry)
+        if prem_expiry > 0 and profiles.wl is not None:
+            await update_client_expiry(profiles.wl.email, prem_expiry)
 
     await _send_profile_message(callback.message, user, profiles, edit=True, delete_after=True)
 
