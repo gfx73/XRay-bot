@@ -20,8 +20,8 @@ from database import (
     validate_and_fix_subscription_date,
 )
 from functions import delete_client_by_email
-from models import SlotName, SubscriptionTier, UserProfiles
 from handlers import setup_handlers
+from models import SlotName, SubscriptionTier, UserProfiles
 from tribute_webhook import create_tribute_app
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)

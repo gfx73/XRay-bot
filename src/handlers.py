@@ -20,7 +20,6 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import config
-from models import SlotName, SubscriptionTier, UserProfiles
 from database import (
     Session,
     StaticProfile,
@@ -53,6 +52,7 @@ from functions import (
     sync_profiles_for_tier,
     update_client_expiry,
 )
+from models import SlotName, SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
 

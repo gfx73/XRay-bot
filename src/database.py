@@ -2,16 +2,18 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
-    Enum as SaEnum,
     Integer,
-    JSON,
     String,
     create_engine,
     func,
     or_,
+)
+from sqlalchemy import (
+    Enum as SaEnum,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import TypeDecorator
