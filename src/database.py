@@ -7,19 +7,41 @@ from sqlalchemy import (
     DateTime,
     Enum as SaEnum,
     Integer,
+    JSON,
     String,
-    Text,
     create_engine,
     func,
     or_,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 from config import config
 from functions import delete_client_by_email
 from models import SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
+
+
+class PydanticJSON(TypeDecorator):
+    """SQLAlchemy column type that transparently stores a Pydantic model as JSON."""
+    impl = JSON
+    cache_ok = True
+
+    def __init__(self, model_class):
+        self.model_class = model_class
+        super().__init__()
+
+    def process_bind_param(self, value, dialect):
+        if value is None or not value:
+            return None
+        return value.model_dump(exclude_none=True)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return self.model_class()
+        return self.model_class.model_validate(value)
+
 
 Base = declarative_base()
 
@@ -36,21 +58,7 @@ class User(Base):
     notified = Column(Boolean, default=False)
     premium_notified = Column(Boolean, default=False)
     subscription_tier = Column(SaEnum(SubscriptionTier), default=SubscriptionTier.STANDARD)
-    profiles_data = Column(Text, nullable=True)
-
-    @property
-    def profiles(self) -> UserProfiles:
-        if not self.profiles_data:
-            return UserProfiles()
-        try:
-            return UserProfiles.model_validate_json(self.profiles_data)
-        except Exception:
-            logger.warning(f"profiles_data parse failed for telegram_id={self.telegram_id}")
-            return UserProfiles()
-
-    @profiles.setter
-    def profiles(self, value: UserProfiles) -> None:
-        self.profiles_data = value.model_dump_json(exclude_none=True)
+    profiles = Column(PydanticJSON(UserProfiles), nullable=True)
 
 class StaticProfile(Base):
     __tablename__ = 'static_profiles'
@@ -100,7 +108,7 @@ async def delete_user_profile(telegram_id: int):
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
-            user.profiles_data = None
+            user.profiles = UserProfiles()
             user.notified = False
             user.premium_notified = False
             session.commit()
@@ -192,7 +200,7 @@ async def get_user_stats():
 async def get_users_with_profiles():
     """Получает всех пользователей с профилями."""
     with Session() as session:
-        return session.query(User).filter(User.profiles_data.isnot(None)).all()
+        return session.query(User).filter(User.profiles.isnot(None)).all()
 
 async def fix_all_subscription_dates():
     """Исправляет все некорректные даты подписок в базе данных."""
@@ -218,12 +226,8 @@ async def delete_user(telegram_id: int) -> bool:
             return False
 
         emails_to_delete: set = set()
-        if user.profiles_data:
-            try:
-                for slot in user.profiles.slots().values():
-                    emails_to_delete.add(slot.email)
-            except Exception as e:
-                logger.error(f"🛑 Error parsing profiles for user {telegram_id}: {e}")
+        for slot in user.profiles.slots().values():
+            emails_to_delete.add(slot.email)
 
         for email in emails_to_delete:
             try:

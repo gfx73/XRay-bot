@@ -105,10 +105,9 @@ async def _check_user_subscription(bot, user, now: datetime):
 
     await _send_expiry_notifications(bot, user, now, std_active, prem_active)
 
-    if not user.profiles_data:
-        return
-
     profiles = user.profiles
+    if not profiles:
+        return
     changed = False
 
     if not std_active and profiles.standard is not None:

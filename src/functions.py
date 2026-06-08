@@ -641,8 +641,6 @@ def _build_email_user_map(users_db: list) -> dict[str, tuple]:
     """Build email → (user, inbound_id) mapping from DB users with profiles."""
     users_map: dict[str, tuple] = {}
     for user in users_db:
-        if not user.profiles_data:
-            continue
         for slot in user.profiles.slots().values():
             first_iid = slot.inbound_ids[0] if slot.inbound_ids else None
             users_map[slot.email] = (user, first_iid)
