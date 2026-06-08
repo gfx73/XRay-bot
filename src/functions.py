@@ -81,17 +81,28 @@ class XUIAPI:
         for cfg in inbound_cfgs:
             inbound = await self.get_inbound(cfg["id"])
             if not inbound:
+                logger.warning(f"⚠️  _detect_reality_flow: get_inbound({cfg['id']}) returned None")
                 continue
             try:
-                stream = json.loads(inbound.get("streamSettings", "{}"))
-                if stream.get("security") != "reality":
+                protocol = inbound.get("protocol", "")
+                raw_stream = inbound.get("streamSettings", "{}")
+                stream = json.loads(raw_stream)
+                security = stream.get("security", "")
+                logger.info(
+                    f"🔍 Inbound {cfg['id']}: protocol={protocol!r}, security={security!r}"
+                )
+                if security != "reality":
                     continue
                 settings = json.loads(inbound.get("settings", "{}"))
                 clients = settings.get("clients", [])
                 flow = clients[0].get("flow", "") if clients else ""
-                return flow or "xtls-rprx-vision"
-            except Exception:
+                result = flow or "xtls-rprx-vision"
+                logger.info(f"✅ Reality flow detected for inbound {cfg['id']}: {result!r}")
+                return result
+            except Exception as e:
+                logger.exception(f"🛑 _detect_reality_flow error for inbound {cfg['id']}: {e}")
                 return "xtls-rprx-vision"
+        logger.info("ℹ️  No Reality inbound found — flow set to empty string")
         return ""
 
     async def _collect_inbound_meta(self, inbound_cfgs: list[dict]) -> dict:
@@ -157,7 +168,12 @@ class XUIAPI:
         }
 
         url = f"{self._api_base()}/api/clients/add"
-        logger.info(f"ℹ️  Creating client {email} in inbounds {inbound_ids}")
+        logger.info(
+            f"ℹ️  Creating client {email} | inbounds={inbound_ids} | "
+            f"flow={flow!r} | limitIp={ip_limit} | totalGB_bytes={traffic_limit_gb * 1024 ** 3} | "
+            f"expiryMs={expiry_ms}"
+        )
+        logger.info(f"📤 Full payload: {json.dumps(payload)}")
         try:
             async with self.session.post(url, json=payload) as resp:
                 if resp.status != 200:
