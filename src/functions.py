@@ -80,18 +80,18 @@ class XUIAPI:
         """Detect VLESS flow from the first Reality inbound."""
         for cfg in inbound_cfgs:
             inbound = await self.get_inbound(cfg["id"])
-            if inbound and inbound.get("protocol") == "reality":
-                try:
-                    settings = json.loads(inbound.get("settings", "{}"))
-                    clients = settings.get("clients", [])
-                    flow = clients[0].get("flow", "") if clients else ""
-                    if not flow:
-                        stream = json.loads(inbound.get("streamSettings", "{}"))
-                        if stream.get("realitySettings"):
-                            flow = "xtls-rprx-vision"
-                except Exception:
-                    flow = "xtls-rprx-vision"
-                return flow
+            if not inbound:
+                continue
+            try:
+                stream = json.loads(inbound.get("streamSettings", "{}"))
+                if stream.get("security") != "reality":
+                    continue
+                settings = json.loads(inbound.get("settings", "{}"))
+                clients = settings.get("clients", [])
+                flow = clients[0].get("flow", "") if clients else ""
+                return flow or "xtls-rprx-vision"
+            except Exception:
+                return "xtls-rprx-vision"
         return ""
 
     async def _collect_inbound_meta(self, inbound_cfgs: list[dict]) -> dict:
