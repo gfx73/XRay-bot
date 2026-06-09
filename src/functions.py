@@ -309,7 +309,7 @@ class XUIAPI:
                 if not data.get("success"):
                     logger.error(f"🛑 Get client failed for {email}: {data.get('msg')}")
                     return False
-                current_client = data.get("obj")
+                current_client = data.get("obj").get("client")
         except Exception as e:
             logger.exception(f"🛑 Get client error: {e}")
             return False
