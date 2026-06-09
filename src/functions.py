@@ -281,6 +281,22 @@ class XUIAPI:
             logger.exception(f"🛑 Delete client error: {e}")
             return False
 
+    async def _get_client(self, email: str):
+        try:
+            get_url = f"{self._api_base()}/api/clients/get/{email}"
+            async with self.session.get(get_url) as resp:
+                if resp.status != 200:
+                    logger.error(f"🛑 Get client failed: status={resp.status}")
+                    return None
+                data = await resp.json()
+                if not data.get("success"):
+                    logger.error(f"🛑 Get client failed for {email}: {data.get('msg')}")
+                    return None
+                return data.get("obj").get("client")
+        except Exception as e:
+            logger.exception(f"🛑 Get client error: {e}")
+            return None
+
     async def update_client_expiry(self, email: str, expiry_time: int):
         """Обновляет expiry клиента по email (применяется ко всем инбаундам)."""
         logger.info(f"🔍 [update_client_expiry] email={email}, expiry_time={expiry_time}")
@@ -298,22 +314,7 @@ class XUIAPI:
 
         expiry_ms = final_expiry * 1000
 
-        # Fetch current client — server replaces the full row, not patches
-        try:
-            get_url = f"{self._api_base()}/api/clients/get/{email}"
-            async with self.session.get(get_url) as resp:
-                if resp.status != 200:
-                    logger.error(f"🛑 Get client failed: status={resp.status}")
-                    return False
-                data = await resp.json()
-                if not data.get("success"):
-                    logger.error(f"🛑 Get client failed for {email}: {data.get('msg')}")
-                    return False
-                current_client = data.get("obj").get("client")
-        except Exception as e:
-            logger.exception(f"🛑 Get client error: {e}")
-            return False
-
+        current_client = await self._get_client(email)
         if not current_client:
             logger.error(f"🛑 update_client_expiry: client {email!r} not found")
             return False

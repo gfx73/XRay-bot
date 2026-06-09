@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from fastapi import FastAPI, HTTPException, Request
 
-from config import DigitalProduct, TributeSub, config
+from config import DigitalProduct, config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,

@@ -79,14 +79,9 @@ class Config(BaseSettings):
         return self
 
     def _parse_inbound_configs_raw(self, raw: str) -> list[dict]:
-        result = []
         if not raw:
-            return result
-        for part in raw.split(","):
-            part = part.strip()
-            if part.isdigit():
-                result.append({"id": int(part)})
-        return result
+            return []
+        return [{"id": int(p)} for p in (s.strip() for s in raw.split(",")) if p.isdigit()]
 
     def get_inbound_configs(self, tier: SubscriptionTier) -> list[dict]:
         raw = self.PREMIUM_INBOUNDS if tier == SubscriptionTier.PREMIUM else self.STANDARD_INBOUNDS
