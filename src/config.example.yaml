@@ -61,14 +61,23 @@ TRIBUTE_SUBSCRIPTIONS: []
 #    url: "https://tribute.tg/..."
 #    referral_reward_hours: 10
 
-# Цифровые товары: список объектов {name, tier, hours, url, referral_reward_hours}
+# Цифровые товары: список объектов {name, tier, hours, price, url, referral_reward_hours}
 # tier: standard | premium  |  hours: срок подписки в часах
+# price: цена в рублях (отображается в кнопке выбора периода; 0 = цена не показывается)
 # url опционален — если задан, кнопка товара появится в меню «Продлить»
 # referral_reward_hours: сколько часов начислять рефереру при покупке товара (0 = без награды)
+# Имена должны быть уникальны в рамках одного тира (standard/premium)
 TRIBUTE_DIGITAL_PRODUCTS: []
 #TRIBUTE_DIGITAL_PRODUCTS:
-#  - name: "VPN 1 Month"
+#  - name: "1 месяц"
 #    tier: "standard"
 #    hours: 720
+#    price: 199
 #    url: "https://tribute.tg/..."
-#    referral_reward_hours: 7
+#    referral_reward_hours: 120
+#  - name: "3 месяца (-11%)"
+#    tier: "standard"
+#    hours: 2160
+#    price: 530
+#    url: "https://tribute.tg/..."
+#    referral_reward_hours: 360

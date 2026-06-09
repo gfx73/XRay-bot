@@ -372,40 +372,61 @@ async def renew_cmd(message: Message, bot: Bot):
     )
 
 
-def _build_renew_keyboard():
-    """Строит клавиатуру оплаты на основе настроенных методов."""
+def _build_tier_keyboard():
+    """Шаг 1: выбор тарифа."""
     builder = InlineKeyboardBuilder()
     has_premium = config.has_premium_inbounds()
     has_tg = bool(config.PAYMENT_TOKEN)
 
-    tiers = [SubscriptionTier.STANDARD]
-    if has_premium:
-        tiers.append(SubscriptionTier.PREMIUM)
+    standard_products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == SubscriptionTier.STANDARD and p.url]
+    premium_products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == SubscriptionTier.PREMIUM and p.url]
+    standard_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == SubscriptionTier.STANDARD and s.url]
+    premium_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == SubscriptionTier.PREMIUM and s.url]
 
-    for tier in tiers:
-        tribute_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == tier and s.url]
-        if not has_tg and not tribute_subs:
-            continue
-        label = TIER_LABELS[tier]
-        if has_tg:
-            for months in sorted(config.PRICES.keys()):
-                price = config.calculate_price(months, tier)
-                disc = config.PRICES[months]["discount_percent"]
-                disc_text = f" (-{disc}%)" if disc else ""
-                builder.button(
-                    text=f"{months} мес. — {price} руб.{disc_text}",
-                    callback_data=f"pay_{tier.value}_{months}",
-                )
-        for sub in tribute_subs:
-            builder.button(text=f"💳 Оплатить {label} через Tribute →", url=sub.url)
+    has_standard = has_tg or standard_products or standard_subs
+    has_premium_options = (has_tg or premium_products or premium_subs) and has_premium
 
-    for product in config.TRIBUTE_DIGITAL_PRODUCTS:
-        if product.url:
-            builder.button(text=f"🛒 {product.name} →", url=product.url)
+    if has_standard:
+        builder.button(text="📦 Standard", callback_data="tier_select_standard")
+    if has_premium_options:
+        builder.button(text="⭐ Premium", callback_data="tier_select_premium")
 
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def _build_period_keyboard(tier: SubscriptionTier):
+    """Шаг 2: выбор периода для выбранного тарифа."""
+    builder = InlineKeyboardBuilder()
+    has_tg = bool(config.PAYMENT_TOKEN)
+
+    if has_tg:
+        for months in sorted(config.PRICES.keys()):
+            price = config.calculate_price(months, tier)
+            disc = config.PRICES[months]["discount_percent"]
+            disc_text = f" (-{disc}%)" if disc else ""
+            builder.button(
+                text=f"{months} мес. — {price} руб.{disc_text}",
+                callback_data=f"pay_{tier.value}_{months}",
+            )
+    else:
+        products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == tier and p.url]
+        for product in products:
+            price_text = f" — {product.price} руб." if product.price > 0 else ""
+            builder.button(text=f"🛒 {product.name}{price_text} →", url=product.url)
+
+        subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == tier and s.url]
+        for sub in subs:
+            builder.button(text=f"💳 Оплатить через Tribute →", url=sub.url)
+
+    builder.button(text="⬅️ Назад", callback_data="back_to_tiers")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _build_renew_keyboard():
+    return _build_tier_keyboard()
 
 
 @router.message(Command("connect"))
@@ -519,8 +540,34 @@ async def referral_info_handler(callback: CallbackQuery, bot: Bot):
 async def renew_subscription(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "💵 *Выберите тариф и период подписки:*",
-        reply_markup=_build_renew_keyboard(),
+        "💵 *Выберите тариф:*",
+        reply_markup=_build_tier_keyboard(),
+        parse_mode='Markdown'
+    )
+
+
+@router.callback_query(F.data == "back_to_tiers")
+async def back_to_tiers(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "💵 *Выберите тариф:*",
+        reply_markup=_build_tier_keyboard(),
+        parse_mode='Markdown'
+    )
+
+
+@router.callback_query(F.data.startswith("tier_select_"))
+async def tier_selected(callback: CallbackQuery):
+    await callback.answer()
+    tier_value = callback.data[len("tier_select_"):]
+    try:
+        tier = SubscriptionTier(tier_value)
+    except ValueError:
+        return
+    label = TIER_LABELS[tier]
+    await callback.message.edit_text(
+        f"{label}\n\n💵 *Выберите период:*",
+        reply_markup=_build_period_keyboard(tier),
         parse_mode='Markdown'
     )
 

@@ -11,6 +11,7 @@ class DigitalProduct(BaseModel):
     tier: SubscriptionTier
     hours: int
     url: str = ""
+    price: int = 0
     referral_reward_hours: int = 0
 
     @field_validator("hours")
@@ -72,9 +73,9 @@ class Config(BaseSettings):
 
     @model_validator(mode="after")
     def check_no_duplicate_names(self) -> "Config":
-        product_names = [p.name for p in self.TRIBUTE_DIGITAL_PRODUCTS]
-        if len(product_names) != len(set(product_names)):
-            raise ValueError("TRIBUTE_DIGITAL_PRODUCTS contains duplicate product names")
+        product_keys = [(p.tier, p.name) for p in self.TRIBUTE_DIGITAL_PRODUCTS]
+        if len(product_keys) != len(set(product_keys)):
+            raise ValueError("TRIBUTE_DIGITAL_PRODUCTS contains duplicate product names within the same tier")
         sub_names = [s.name for s in self.TRIBUTE_SUBSCRIPTIONS]
         if len(sub_names) != len(set(sub_names)):
             raise ValueError("TRIBUTE_SUBSCRIPTIONS contains duplicate subscription names")
