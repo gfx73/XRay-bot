@@ -177,18 +177,18 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
 
     std_expiry = user.subscription_end.strftime("%d-%m-%Y %H:%M") if user.subscription_end else "—"
     std_status = "Активна" if std_active else "Истекла"
-    std_line = f"**📦 Standard**: `{std_status}` (до `{std_expiry}`)"
+    std_line = f"*📦 Стандартный*: `{std_status}` (до `{std_expiry}`)"
 
     text = (
-        f"**Имя профиля**: `{user.full_name}`\n"
-        f"**Id**: `{user.telegram_id}`\n"
+        f"*Имя профиля*: `{user.full_name}`\n"
+        f"*Id*: `{user.telegram_id}`\n"
         f"{std_line}"
     )
 
     if config.has_premium_inbounds():
         prem_expiry = user.premium_end.strftime("%d-%m-%Y %H:%M") if getattr(user, 'premium_end', None) else "—"
         prem_status = "Активна" if prem_active else "Истекла"
-        text += f"\n**⭐ Premium**: `{prem_status}` (до `{prem_expiry}`)"
+        text += f"\n*⭐ Premium*: `{prem_status}` (до `{prem_expiry}`)"
 
     any_active = std_active or prem_active
     builder = InlineKeyboardBuilder()
@@ -283,7 +283,7 @@ async def renew_cmd(message: Message, bot: Bot):
         await start_cmd(message, bot)
         return
     await message.answer(
-        "💵 **Выберите тариф и период подписки:**",
+        "💵 *Выберите тариф и период подписки:*",
         reply_markup=_build_renew_keyboard(),
         parse_mode='Markdown'
     )
@@ -380,10 +380,10 @@ async def stats_cmd(message: Message, bot: Bot):
 
     await message.answer("⚙️ Загружаем вашу статистику...")
 
-    lines = ["📊 **Ваша статистика:**\n"]
+    lines = ["📊 *Ваша статистика:*\n"]
     for slot, profile in profiles.slots().items():
         stats = await get_user_stats(profile.email)
-        label = "🔒 Standart" if slot == SlotName.STANDARD else "⚡ Whitelist"
+        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "💎 Premium"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -418,7 +418,7 @@ async def help_msg(callback: CallbackQuery):
 async def renew_subscription(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "💵 **Выберите тариф и период подписки:**",
+        "💵 *Выберите тариф и период подписки:*",
         reply_markup=_build_renew_keyboard(),
         parse_mode='Markdown'
     )
@@ -609,7 +609,7 @@ async def _send_profile_message(msg_or_callback, user, profiles: UserProfiles, e
     for slot, profile in profiles.slots().items():
         sub_url = generate_sub_url(profile.sub_id)
         full_sub_url = sub_url if sub_url.startswith(("http://", "https://")) else "https://" + sub_url
-        btn_text = "🔒 Подключиться (Standart)" if slot == SlotName.STANDARD else "⚡ Подключиться (Whitelist)"
+        btn_text = "🔒 Подключиться (Стандартный)" if slot == SlotName.STANDARD else "💎 Подключиться (Premium)"
         builder.button(text=btn_text, url=full_sub_url)
 
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
@@ -655,10 +655,10 @@ async def user_stats(callback: CallbackQuery):
 
     await callback.message.edit_text("⚙️ Загружаем вашу статистику...")
 
-    lines = ["📊 **Ваша статистика:**\n"]
+    lines = ["📊 *Ваша статистика:*\n"]
     for slot, profile in profiles.slots().items():
         stats = await get_user_stats(profile.email)
-        label = "🔒 Reality" if slot == SlotName.STANDARD else "⚡ Whitelist"
+        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "💎 Premium"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -859,7 +859,7 @@ async def admin_user_list(callback: CallbackQuery):
     builder.button(text="⏱️ Статические профили", callback_data="static_profiles_menu")
     builder.button(text="⬅️ Назад", callback_data="admin_menu")
     builder.adjust(1, 1, 1)
-    await callback.message.edit_text("**Выберите фильтр**", reply_markup=builder.as_markup(), parse_mode='Markdown')
+    await callback.message.edit_text("*Выберите фильтр*", reply_markup=builder.as_markup(), parse_mode='Markdown')
 
 
 @router.callback_query(F.data == "user_list_active")
@@ -955,7 +955,7 @@ async def static_profiles_menu(callback: CallbackQuery):
     builder.button(text="📋 Вывести статические профили", callback_data="static_profile_list")
     builder.button(text="⬅️ Назад", callback_data="admin_user_list")
     builder.adjust(1)
-    await callback.message.edit_text("**Выберите действие**", reply_markup=builder.as_markup(), parse_mode='Markdown')
+    await callback.message.edit_text("*Выберите действие*", reply_markup=builder.as_markup(), parse_mode='Markdown')
 
 
 @router.callback_query(F.data == "static_profile_add")
@@ -1020,7 +1020,7 @@ async def static_profile_list(callback: CallbackQuery):
         photo = BufferedInputFile(img_byte_arr.getvalue(), filename="qr.png")
         await callback.message.answer_photo(
             photo=photo,
-            caption=f"**{profile.name}**\n`{profile.vless_url}`",
+            caption=f"*{profile.name}*\n`{profile.vless_url}`",
             reply_markup=builder.as_markup(),
             parse_mode='Markdown'
         )
@@ -1114,7 +1114,7 @@ async def admin_check_subscriptions(callback: CallbackQuery):
 async def admin_delete_user_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.answer(
-        "🗑️ **Удаление пользователя**\n\nВведите Telegram ID пользователя для удаления:",
+        "🗑️ *Удаление пользователя*\n\nВведите Telegram ID пользователя для удаления:",
         parse_mode='Markdown'
     )
     await state.set_state(AdminStates.DELETE_USER)
