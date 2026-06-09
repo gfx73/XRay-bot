@@ -34,8 +34,10 @@ from database import (
     engine,
     fix_all_subscription_dates,
     get_all_users,
+    get_referral_count,
     get_static_profiles,
     get_user,
+    get_user_by_referral_code,
     get_users_with_profiles,
     update_subscription,
 )
@@ -70,6 +72,7 @@ from messages import (
     fix_profiles_result,
     network_stats_text,
     payment_success,
+    referral_info_text,
     support_admin_notification,
     support_reply_received,
     support_reply_sent,
@@ -263,13 +266,14 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
     builder.button(text="💵 Продлить" if any_active else "💵 Оплатить", callback_data="renew_sub")
     builder.button(text="✅ Подключить", callback_data="connect")
     builder.button(text="📊 Статистика", callback_data="stats")
+    builder.button(text="👥 Рефералы", callback_data="referral_info")
     builder.button(text="ℹ️ Помощь", callback_data="help")
     builder.button(text="💬 Поддержка", callback_data="support")
 
     if user.is_admin:
         builder.button(text="⚠️ Админ. меню", callback_data="admin_menu")
 
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 2)
 
     if message_id:
         await bot.edit_message_text(
@@ -290,6 +294,9 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
 @router.message(Command("start"))
 async def start_cmd(message: Message, bot: Bot):
     logger.info(f"ℹ️  Start command from {message.from_user.id}")
+    text_parts = (message.text or "").split(maxsplit=1)
+    referral_arg = text_parts[1].strip() if len(text_parts) > 1 else None
+
     user = await get_user(message.from_user.id)
 
     update_data = {}
@@ -299,12 +306,19 @@ async def start_cmd(message: Message, bot: Bot):
         if user.username != message.from_user.username:
             update_data["username"] = message.from_user.username
     else:
+        referred_by = None
+        if referral_arg:
+            referrer = await get_user_by_referral_code(referral_arg)
+            if referrer and referrer.telegram_id != message.from_user.id:
+                referred_by = referrer.telegram_id
+
         is_admin = message.from_user.id in config.ADMINS
         user = await create_user(
             telegram_id=message.from_user.id,
             full_name=message.from_user.full_name,
             username=message.from_user.username,
-            is_admin=is_admin
+            is_admin=is_admin,
+            referred_by=referred_by,
         )
         await message.answer(
             welcome((await bot.get_me()).full_name),
@@ -481,6 +495,24 @@ async def help_msg(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     await callback.message.edit_text(HELP_TEXT, parse_mode='HTML', reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "referral_info")
+async def referral_info_handler(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    user = await get_user(callback.from_user.id)
+    if not user:
+        return
+    bot_info = await bot.get_me()
+    referral_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
+    count = await get_referral_count(user.telegram_id)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ Назад", callback_data="back_to_menu")
+    await callback.message.edit_text(
+        referral_info_text(referral_link, count),
+        parse_mode='Markdown',
+        reply_markup=builder.as_markup(),
+    )
 
 
 @router.callback_query(F.data == "renew_sub")

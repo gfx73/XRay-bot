@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from fastapi import FastAPI, HTTPException, Request
 
-from config import DigitalProduct, config
+from config import DigitalProduct, TributeSub, config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,
@@ -15,6 +15,7 @@ from functions import (
 )
 from messages import (
     TRIBUTE_CANCELLED,
+    referral_reward_received,
     tribute_admin_notify,
     tribute_digital_activated,
     tribute_digital_admin_notify,
@@ -50,11 +51,11 @@ async def _sync_profiles(telegram_id: int, tier: SubscriptionTier) -> None:
             session.commit()
 
 
-def _resolve_tier(subscription_name: str) -> SubscriptionTier:
+def _find_subscription(name: str) -> TributeSub | None:
     for sub in config.TRIBUTE_SUBSCRIPTIONS:
-        if sub.name == subscription_name:
-            return sub.tier
-    return SubscriptionTier.STANDARD
+        if sub.name == name:
+            return sub
+    return None
 
 
 def _find_digital_product(name: str) -> DigitalProduct | None:
@@ -62,6 +63,27 @@ def _find_digital_product(name: str) -> DigitalProduct | None:
         if product.name == name:
             return product
     return None
+
+
+async def _reward_referrer(buyer_id: int, reward_days: int, tier: SubscriptionTier, bot: Bot) -> None:
+    if reward_days <= 0:
+        return
+    buyer = await get_user(buyer_id)
+    if not buyer or not buyer.referred_by:
+        return
+    referrer_id = buyer.referred_by
+    success = await update_subscription(referrer_id, hours=reward_days * 24, tier=tier)
+    if not success:
+        logger.warning(f"⚠️ Referral reward: update_subscription failed for referrer {referrer_id}")
+        return
+    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
+    logger.info(f"✅ Referral reward: {reward_days}d {tier} → referrer {referrer_id} (buyer {buyer_id})")
+    with contextlib.suppress(Exception):
+        await bot.send_message(
+            referrer_id,
+            referral_reward_received(reward_days, tier_label),
+            parse_mode="Markdown",
+        )
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
@@ -91,7 +113,8 @@ async def _handle_subscription_event(
     event_name: str, payload: dict, telegram_id: int, bot: Bot
 ) -> None:
     """Handle new_subscription and renewed_subscription events."""
-    tier = _resolve_tier(payload.get("subscription_name", ""))
+    sub = _find_subscription(payload.get("subscription_name", ""))
+    tier = sub.tier if sub else SubscriptionTier.STANDARD
     months = PERIOD_TO_MONTHS.get(payload.get("period", "monthly"), 1)
     tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
     suffix = _months_suffix(months)
@@ -120,6 +143,7 @@ async def _handle_subscription_event(
                 parse_mode="Markdown",
             )
 
+    await _reward_referrer(telegram_id, sub.referral_reward_days if sub else 0, tier, bot)
     logger.info(f"✅ Tribute '{event_name}': user {telegram_id}, tier={tier}, months={months}")
 
 
@@ -153,6 +177,7 @@ async def _handle_digital_product_event(
                 parse_mode="Markdown",
             )
 
+    await _reward_referrer(telegram_id, product.referral_reward_days, product.tier, bot)
     logger.info(f"✅ Tribute 'new_digital_product': user {telegram_id}, product='{product.name}', "
                 f"tier={tier}, hours={product.hours}")
 

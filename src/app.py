@@ -191,6 +191,13 @@ async def setup_bot_commands(bot: Bot):
         logger.error(f"❌ Failed to register bot commands: {e}")
 
 async def main():
+    if config.PAYMENT_TOKEN:
+        raise RuntimeError(
+            "PAYMENT_TOKEN настроен, но Telegram Payments не интегрирован "
+            "с реферальной системой. Добавьте вызов _reward_referrer в "
+            "process_successful_payment (handlers.py) и удалите этот guard."
+        )
+
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
 

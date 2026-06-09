@@ -264,3 +264,27 @@ def support_reply_sent() -> str:
 
 def support_reply_received(text: str) -> str:
     return f"💬 *Ответ от поддержки:*\n\n{text}"
+
+
+def referral_info_text(link: str, count: int) -> str:
+    return (
+        "👥 *Реферальная программа*\n\n"
+        "Приглашайте друзей и получайте бонусные дни подписки за каждую их оплату!\n\n"
+        f"🔗 *Ваша реферальная ссылка:*\n`{link}`\n\n"
+        f"📊 *Приглашено пользователей:* `{count}`\n\n"
+        "💡 Поделитесь ссылкой — когда друг оплатит подписку, вы получите бонусные дни."
+    )
+
+
+def referral_reward_received(days: int, tier_label: str) -> str:
+    if days == 1:
+        suffix = "день"
+    elif days in (2, 3, 4):
+        suffix = "дня"
+    else:
+        suffix = "дней"
+    return (
+        f"🎁 *Ваш реферал оплатил подписку!*\n\n"
+        f"📦 Тариф: {tier_label}\n"
+        f"⏱ Вам начислено: *{days} {suffix}* подписки"
+    )

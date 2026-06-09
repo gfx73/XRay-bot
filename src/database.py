@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timedelta
 
 from sqlalchemy import (
@@ -61,6 +62,8 @@ class User(Base):
     premium_notified = Column(Boolean, default=False)
     subscription_tier = Column(SaEnum(SubscriptionTier), default=SubscriptionTier.STANDARD)
     profiles = Column(PydanticJSON(UserProfiles), nullable=True)
+    referral_code = Column(String, unique=True, nullable=True)
+    referred_by = Column(Integer, nullable=True)
 
 class StaticProfile(Base):
     __tablename__ = 'static_profiles'
@@ -87,7 +90,23 @@ async def get_user(telegram_id: int):
                 logger.info(f"✅ Fixed subscription date for user {telegram_id}: {original_end} -> {user.subscription_end}")
         return user
 
-async def create_user(telegram_id: int, full_name: str, username: str | None = None, is_admin: bool = False):
+async def get_user_by_referral_code(code: str):
+    with Session() as session:
+        return session.query(User).filter_by(referral_code=code).first()
+
+
+async def get_referral_count(telegram_id: int) -> int:
+    with Session() as session:
+        return session.query(func.count(User.id)).filter_by(referred_by=telegram_id).scalar() or 0
+
+
+async def create_user(
+    telegram_id: int,
+    full_name: str,
+    username: str | None = None,
+    is_admin: bool = False,
+    referred_by: int | None = None,
+):
     with Session() as session:
         subscription_end = validate_and_fix_subscription_date(
             datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
@@ -99,6 +118,8 @@ async def create_user(telegram_id: int, full_name: str, username: str | None = N
             subscription_end=subscription_end,
             is_admin=is_admin,
             subscription_tier=SubscriptionTier(config.TRIAL_TIER),
+            referral_code=secrets.token_urlsafe(8),
+            referred_by=referred_by,
         )
         session.add(user)
         session.commit()
