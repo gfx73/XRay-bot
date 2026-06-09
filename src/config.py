@@ -11,6 +11,7 @@ class DigitalProduct(BaseModel):
     name: str
     tier: SubscriptionTier
     hours: int
+    url: str = ""
 
     @field_validator("hours")
     @classmethod
@@ -18,6 +19,12 @@ class DigitalProduct(BaseModel):
         if v <= 0:
             raise ValueError("hours must be > 0")
         return v
+
+
+class TributeSub(BaseModel):
+    name: str
+    tier: SubscriptionTier
+    url: str
 
 
 class Config(BaseSettings):
@@ -61,11 +68,15 @@ class Config(BaseSettings):
 
     TRIBUTE_API_KEY: str = ""
     TRIBUTE_WEBHOOK_PORT: int = 8081
-    TRIBUTE_BASIC_PLAN_NAME: str = "Basic"
-    TRIBUTE_PREMIUM_PLAN_NAME: str = "Premium"
-    TRIBUTE_BASIC_URL: str = ""
-    TRIBUTE_PREMIUM_URL: str = ""
+    TRIBUTE_SUBSCRIPTIONS: list[TributeSub] = Field(default_factory=list)
     TRIBUTE_DIGITAL_PRODUCTS: list[DigitalProduct] = Field(default_factory=list)
+
+    @field_validator("TRIBUTE_SUBSCRIPTIONS", mode="before")
+    @classmethod
+    def parse_tribute_subscriptions(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v or []
 
     @field_validator("TRIBUTE_DIGITAL_PRODUCTS", mode="before")
     @classmethod
@@ -75,10 +86,13 @@ class Config(BaseSettings):
         return v or []
 
     @model_validator(mode="after")
-    def check_no_duplicate_product_names(self) -> "Config":
-        names = [p.name for p in self.TRIBUTE_DIGITAL_PRODUCTS]
-        if len(names) != len(set(names)):
+    def check_no_duplicate_names(self) -> "Config":
+        product_names = [p.name for p in self.TRIBUTE_DIGITAL_PRODUCTS]
+        if len(product_names) != len(set(product_names)):
             raise ValueError("TRIBUTE_DIGITAL_PRODUCTS contains duplicate product names")
+        sub_names = [s.name for s in self.TRIBUTE_SUBSCRIPTIONS]
+        if len(sub_names) != len(set(sub_names)):
+            raise ValueError("TRIBUTE_SUBSCRIPTIONS contains duplicate subscription names")
         return self
 
     @field_validator("ADMINS", mode="before")

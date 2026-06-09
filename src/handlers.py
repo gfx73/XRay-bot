@@ -282,12 +282,15 @@ def _build_renew_keyboard():
     builder = InlineKeyboardBuilder()
     has_premium = config.has_premium_inbounds()
     has_tg = bool(config.PAYMENT_TOKEN)
-    tribute_basic_url = config.TRIBUTE_BASIC_URL
-    tribute_premium_url = config.TRIBUTE_PREMIUM_URL
 
-    def _add_tier(tier: SubscriptionTier, tribute_url: str) -> None:
-        if not has_tg and not tribute_url:
-            return
+    tiers = [SubscriptionTier.STANDARD]
+    if has_premium:
+        tiers.append(SubscriptionTier.PREMIUM)
+
+    for tier in tiers:
+        tribute_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == tier and s.url]
+        if not has_tg and not tribute_subs:
+            continue
         label = TIER_LABELS[tier]
         if has_tg:
             for months in sorted(config.PRICES.keys()):
@@ -298,12 +301,12 @@ def _build_renew_keyboard():
                     text=f"{months} мес. — {price} руб.{disc_text}",
                     callback_data=f"pay_{tier.value}_{months}",
                 )
-        if tribute_url:
-            builder.button(text=f"💳 Оплатить {label} через Tribute →", url=tribute_url)
+        for sub in tribute_subs:
+            builder.button(text=f"💳 Оплатить {label} через Tribute →", url=sub.url)
 
-    _add_tier(SubscriptionTier.STANDARD, tribute_basic_url)
-    if has_premium:
-        _add_tier(SubscriptionTier.PREMIUM, tribute_premium_url)
+    for product in config.TRIBUTE_DIGITAL_PRODUCTS:
+        if product.url:
+            builder.button(text=f"🛒 {product.name} →", url=product.url)
 
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     builder.adjust(1)

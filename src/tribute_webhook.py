@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from fastapi import FastAPI, HTTPException, Request
 
-from config import DigitalProduct, config
+from config import DigitalProduct, TributeSub, config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,
@@ -44,8 +44,9 @@ async def _sync_profiles(telegram_id: int, tier: SubscriptionTier) -> None:
 
 
 def _resolve_tier(subscription_name: str) -> SubscriptionTier:
-    if subscription_name == config.TRIBUTE_PREMIUM_PLAN_NAME:
-        return SubscriptionTier.PREMIUM
+    for sub in config.TRIBUTE_SUBSCRIPTIONS:
+        if sub.name == subscription_name:
+            return sub.tier
     return SubscriptionTier.STANDARD
 
 
