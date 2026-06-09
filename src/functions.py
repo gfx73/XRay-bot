@@ -318,6 +318,10 @@ class XUIAPI:
             logger.error(f"🛑 update_client_expiry: client {email!r} not found")
             return False
 
+        if current_client.get("expiryTime") == expiry_ms:
+            logger.info(f"⏭️ Skipping update for {email}: expiry already {expiry_ms} ms")
+            return True
+
         logger.info(current_client)
         payload = {
             "id": current_client.get("uuid", ""),
