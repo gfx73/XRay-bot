@@ -52,6 +52,21 @@ from functions import (
     sync_profiles_for_tier,
     update_client_expiry,
 )
+from messages import (
+    CONNECT_INSTRUCTIONS,
+    HELP_TEXT,
+    admin_menu_text,
+    admin_payment_notification,
+    broadcast_result,
+    check_subs_result,
+    delete_user_confirm,
+    delete_user_failure,
+    delete_user_success,
+    fix_profiles_result,
+    network_stats_text,
+    payment_success,
+    welcome,
+)
 from models import SlotName, SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
@@ -223,10 +238,7 @@ async def start_cmd(message: Message, bot: Bot):
             is_admin=is_admin
         )
         await message.answer(
-            f"Добро пожаловать в VPN бота `{(await bot.get_me()).full_name}`!\n"
-            "Вам предоставлен **бесплатный** тестовый период на **3 дня**!\n\n"
-            "Узнайте больше о видах подписки в разделе ℹ️ Помощь!\n\n"
-            "А если коротко, то Premium вам нужен для обхода БС, когда не работает ничего кроме ВК, Max...",
+            welcome((await bot.get_me()).full_name),
             parse_mode='Markdown'
         )
         await asyncio.sleep(2)
@@ -387,20 +399,7 @@ async def stats_cmd(message: Message, bot: Bot):
 async def help_cmd(message: Message, bot: Bot):
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
-    text = (
-        "О боте:\n "
-        "Самые современные технологии обходов.\n"
-        "Нет ограничений по траффику для стандартных тарифов.\n"
-        "Авторские мануалы по настройке в закрытом tg канале(доступ при покупке через tribute).\n"
-        "Поддержка в случае возникновения проблем. Своим продуктом я пользуюсь лично.\n"
-        "Be smart, be wise, be a snake.\n\n"
-        "О различиях подписок:\n"
-        "Стандартная подписка включает подключение до 5 устройств без лимитов по траффику.\n"
-        "Premium подписка предлагает конфигурацию для обхода белых списков. "
-        "Думаю многих бесит, что выйдя на улицу, пользоваться ничем кроме ВК и Яндекса невозможно. "
-        "Данная конфигурация создана именно для вас. Есть лишь одно ограничение: 50ГБ траффика в месяц."
-    )
-    await message.answer(text, parse_mode='HTML', reply_markup=builder.as_markup())
+    await message.answer(HELP_TEXT, parse_mode='HTML', reply_markup=builder.as_markup())
 
 
 # ────────────────────────────────────────────────────────────
@@ -412,20 +411,7 @@ async def help_msg(callback: CallbackQuery):
     await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="back_to_menu")
-    text = (
-        "О боте:\n "
-        "Самые современные технологии обходов.\n"
-        "Нет ограничений по траффику для стандартных тарифов.\n"
-        "Авторские мануалы по настройке в закрытом tg канале(доступ при покупке через tribute).\n"
-        "Поддержка в случае возникновения проблем. Своим продуктом я пользуюсь лично.\n"
-        "Be smart, be wise, be a snake.\n\n"
-        "О различиях подписок:\n"
-        "Стандартная подписка включает подключение до 5 устройств без лимитов по траффику.\n"
-        "Premium подписка предлагает конфигурацию для обхода белых списков. "
-        "Думаю многих бесит, что выйдя на улицу, пользоваться ничем кроме ВК и Яндекса невозможно. "
-        "Данная конфигурация создана именно для вас. Есть лишь одно ограничение: 50ГБ траффика в месяц."
-    )
-    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=builder.as_markup())
+    await callback.message.edit_text(HELP_TEXT, parse_mode='HTML', reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data == "renew_sub")
@@ -551,16 +537,10 @@ async def process_successful_payment(message: Message, bot: Bot):
                 db_user.profiles = profiles_to_save
                 session.commit()
 
-        await message.answer(
-            f"✅ Оплата прошла успешно! Ваша подписка {action_type} на {months} {suffix}.\n"
-            f"Тариф: {tier_label}\n\n"
-            "Спасибо за покупку! 🎉"
-        )
+        await message.answer(payment_success(action_type, months, suffix, tier_label))
 
-        admin_message = (
-            f"{action_type.capitalize()} подписка пользователем "
-            f"`{user.full_name}` | `{user.telegram_id}` "
-            f"на {months} {suffix} ({tier_label}) — {final_price}₽"
+        admin_message = admin_payment_notification(
+            action_type, user.full_name, user.telegram_id, months, suffix, tier_label, final_price
         )
         for admin_id in config.ADMINS:
             try:
@@ -635,19 +615,6 @@ async def _send_profile_message(msg_or_callback, user, profiles: UserProfiles, e
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
     builder.adjust(1)
 
-    instructions = (
-        "📲 Как подключить VPN\n"
-        "1. Нажмите кнопку «Подключиться» или отсканируйте QR код\n"
-        "Откроется страница с вашим VPN-профилем.\n\n"
-        "2. Пролистайте страницу вниз\n"
-        "Найдите кнопки с вашей операционной системой:\n"
-        "📱 Android\n"
-        "🍏 iPhone (iOS)\n\n"
-        "3. Выберите своё устройство и приложение\n\n"
-        "✅ Готово! VPN включён 🚀\n\n"
-        "💡 Если не получилось — попробуйте другое приложение\n"
-    )
-
     # QR-код от standard-профиля
     std_sub_id = profiles.standard.sub_id if profiles.standard is not None else None
     if std_sub_id:
@@ -665,7 +632,7 @@ async def _send_profile_message(msg_or_callback, user, profiles: UserProfiles, e
     img_byte_arr.seek(0)
     photo = BufferedInputFile(img_byte_arr.getvalue(), filename="qr.png")
 
-    caption = instructions
+    caption = CONNECT_INSTRUCTIONS
 
     if delete_after:
         with contextlib.suppress(Exception):
@@ -718,12 +685,7 @@ async def admin_menu(callback: CallbackQuery):
     total, with_sub, without_sub = await db_user_stats()
     online_count = await get_online_users()
 
-    text = (
-        "**Административное меню**\n\n"
-        f"**Всего пользователей**: `{total}`\n"
-        f"**С подпиской/Без подписки**: `{with_sub}`/`{without_sub}`\n"
-        f"**Онлайн**: `{online_count}` | **Офлайн**: `{with_sub - online_count}`"
-    )
+    text = admin_menu_text(total, with_sub, without_sub, online_count)
 
     builder = InlineKeyboardBuilder()
     builder.button(text="+ время", callback_data="admin_add_time")
@@ -982,12 +944,7 @@ async def admin_send_message(message: Message, state: FSMContext, bot: Bot):
             logger.error(f"🛑 Ошибка отправки {user.telegram_id}: {e}")
             failed += 1
 
-    await message.answer(
-        f"📨 Результаты рассылки:\n\n"
-        f"• Успешно: {success}\n"
-        f"• Не удалось: {failed}\n"
-        f"• Всего: {len(users)}"
-    )
+    await message.answer(broadcast_result(success, failed, len(users)))
     await state.clear()
 
 
@@ -1100,10 +1057,7 @@ async def network_stats(callback: CallbackQuery):
     if download_size == "GB":
         download = f"{int(float(download) / 1024):.2f}"
     await callback.answer()
-    text = (
-        "📊 **Статистика использования сети:**\n\n"
-        f"🔼 Upload - `{upload} {upload_size}` | 🔽 Download - `{download} {download_size}`"
-    )
+    text = network_stats_text(upload, upload_size, download, download_size)
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад", callback_data="admin_menu")
     await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())
@@ -1130,13 +1084,7 @@ async def admin_fix_profiles(callback: CallbackQuery):
                     logger.error(f"🛑 Error fixing profile {slot_profile.email}: {e}")
                     fail_count += 1
 
-        text = (
-            f"🔧 **Исправление профилей завершено:**\n\n"
-            f"📊 Исправлено дат в БД: `{fixed_db_count}`\n"
-            f"✅ Обновлено профилей в 3x-ui: `{success_count}`\n"
-            f"❌ Ошибок обновления: `{fail_count}`\n\n"
-            f"📋 Всего проверено пользователей: `{len(users)}`"
-        )
+        text = fix_profiles_result(fixed_db_count, success_count, fail_count, len(users))
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ Назад", callback_data="admin_menu")
         await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())
@@ -1152,39 +1100,7 @@ async def admin_check_subscriptions(callback: CallbackQuery):
     try:
         stats = await check_and_fix_subscriptions()
 
-        if "error" in stats:
-            text = f"❌ **Ошибка при проверке подписок:**\n\n📋 {stats['error']}"
-        else:
-            text = (
-                f"🔍 **Проверка подписок завершена:**\n\n"
-                f"📊 **Статистика:**\n"
-                f"• Всего клиентов в 3x-ui: `{stats['total_3xui']}`\n"
-                f"• Всего пользователей в БД: `{stats['total_db']}`\n"
-                f"• Совпадают: `{stats['matched']}` ✅\n"
-                f"• Расхождения: `{stats['mismatch']}` ⚠️\n"
-                f"• Исправлено: `{stats['fixed']}` 🔧\n"
-                f"• Нет в БД: `{stats['not_in_db']}` ℹ️\n\n"
-            )
-
-            problems = [d for d in stats['details'] if d['status'] in ['mismatch', 'fix_failed', 'fix_error']]
-            if problems:
-                text += f"⚠️ **Проблемы ({len(problems)}):**\n\n"
-                for i, problem in enumerate(problems[:10], 1):
-                    status_emoji = {'mismatch': '⚠️', 'fix_failed': '❌', 'fix_error': '🛑'}.get(problem['status'], '❓')
-                    text += f"{i}. {status_emoji} `{problem['email']}` (inbound {problem.get('inbound_id', '?')})\n"
-                    if problem['status'] == 'fix_error':
-                        text += f"   Ошибка: {problem.get('error', 'Неизвестно')}\n"
-                    text += "\n"
-                if len(problems) > 10:
-                    text += f"... и ещё {len(problems) - 10} проблем\n\n"
-
-            fixed = [d for d in stats['details'] if d['status'] == 'fixed']
-            if fixed:
-                text += f"✅ **Исправлено ({len(fixed)}):**\n\n"
-                for i, fix in enumerate(fixed[:5], 1):
-                    text += f"{i}. `{fix['email']}`\n"
-                if len(fixed) > 5:
-                    text += f"... и ещё {len(fixed) - 5}\n\n"
+        text = check_subs_result(stats)
 
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ Назад", callback_data="admin_menu")
@@ -1217,15 +1133,11 @@ async def admin_delete_user_process(message: Message, state: FSMContext):
 
         username = f"@{user.username}" if user.username else "отсутствует"
         has_profile = _has_profiles(user)
-        text = (
-            f"⚠️ **Подтвердите удаление:**\n\n"
-            f"👤 **Имя:** `{user.full_name}`\n"
-            f"📱 **Username:** `{username}`\n"
-            f"🆔 **Telegram ID:** `{user.telegram_id}`\n"
-            f"📅 **Регистрация:** `{user.registration_date.strftime('%d-%m-%Y %H:%M')}`\n"
-            f"⏰ **Подписка до:** `{user.subscription_end.strftime('%d-%m-%Y %H:%M')}`\n"
-            f"🔧 **Профиль:** `{'Есть' if has_profile else 'Нет'}`\n\n"
-            f"❗️ **Это действие необратимо!**"
+        text = delete_user_confirm(
+            user.full_name, username, user.telegram_id,
+            user.registration_date.strftime('%d-%m-%Y %H:%M'),
+            user.subscription_end.strftime('%d-%m-%Y %H:%M'),
+            has_profile,
         )
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Подтвердить удаление", callback_data=f"confirm_delete_{telegram_id}")
@@ -1249,17 +1161,9 @@ async def admin_confirm_delete_user(callback: CallbackQuery):
         result = await delete_user(telegram_id)
 
         if result:
-            text = (
-                f"✅ **Пользователь удалён**\n\n"
-                f"🆔 Telegram ID: `{telegram_id}`\n\n"
-                f"Профили в 3x-ui также были удалены (если существовали)."
-            )
+            text = delete_user_success(telegram_id)
         else:
-            text = (
-                f"❌ **Ошибка удаления**\n\n"
-                f"🆔 Telegram ID: `{telegram_id}`\n\n"
-                f"Пользователь не найден в базе данных."
-            )
+            text = delete_user_failure(telegram_id)
         builder = InlineKeyboardBuilder()
         builder.button(text="⬅️ В админ-меню", callback_data="admin_menu")
         await callback.message.edit_text(text, parse_mode='Markdown', reply_markup=builder.as_markup())

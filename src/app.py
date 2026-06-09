@@ -21,6 +21,7 @@ from database import (
 )
 from functions import delete_client_by_email
 from handlers import setup_handlers
+from messages import PREM_EXPIRY_WARNING, SUB_EXPIRED, SUB_EXPIRY_WARNING
 from models import SlotName, SubscriptionTier, UserProfiles
 from tribute_webhook import create_tribute_app
 
@@ -53,10 +54,7 @@ async def _send_expiry_notifications(bot, user, now: datetime, std_active: bool,
     """Send 24h expiry warning notifications."""
     if std_active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
         try:
-            await bot.send_message(
-                user.telegram_id,
-                "⚠️ Ваша подписка истекает через 24 часа! Продлите подписку, чтобы сохранить доступ."
-            )
+            await bot.send_message(user.telegram_id, SUB_EXPIRY_WARNING)
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
@@ -67,10 +65,7 @@ async def _send_expiry_notifications(bot, user, now: datetime, std_active: bool,
 
     if prem_active and (user.premium_end - now < timedelta(days=1)) and not user.premium_notified:
         try:
-            await bot.send_message(
-                user.telegram_id,
-                "⚠️ Ваша Premium-подписка истекает через 24 часа! Продлите подписку, чтобы сохранить доступ."
-            )
+            await bot.send_message(user.telegram_id, PREM_EXPIRY_WARNING)
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
@@ -128,10 +123,7 @@ async def _check_user_subscription(bot, user, now: datetime):
 
         if not std_active and not prem_active:
             try:
-                await bot.send_message(
-                    user.telegram_id,
-                    "❌ Ваша подписка истекла! Профиль VPN был удален. Продлите подписку, чтобы создать новый."
-                )
+                await bot.send_message(user.telegram_id, SUB_EXPIRED)
             except Exception as e:
                 logger.warning(f"⚠️ Notification error: {e}")
 

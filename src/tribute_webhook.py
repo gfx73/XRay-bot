@@ -13,6 +13,13 @@ from functions import (
     get_safe_expiry_timestamp,
     sync_profiles_for_tier,
 )
+from messages import (
+    TRIBUTE_CANCELLED,
+    tribute_admin_notify,
+    tribute_digital_activated,
+    tribute_digital_admin_notify,
+    tribute_sub_activated,
+)
 from models import SubscriptionTier
 
 logger = logging.getLogger(__name__)
@@ -103,19 +110,13 @@ async def _handle_subscription_event(
 
     action = "продлена" if event_name == "renewed_subscription" else "активирована"
     with contextlib.suppress(Exception):
-        await bot.send_message(
-            telegram_id,
-            f"✅ Подписка {action} через Tribute!\n"
-            f"Тариф: {tier_label} | Срок: {months} {suffix}\n\n"
-            "Используйте /connect для получения конфигурации."
-        )
+        await bot.send_message(telegram_id, tribute_sub_activated(action, tier_label, months, suffix))
 
     for admin_id in config.ADMINS:
         with contextlib.suppress(Exception):
             await bot.send_message(
                 admin_id,
-                f"Tribute: подписка {action} — `{telegram_id}` "
-                f"на {months} {suffix} ({tier_label})",
+                tribute_admin_notify(action, telegram_id, months, suffix, tier_label),
                 parse_mode="Markdown",
             )
 
@@ -142,19 +143,13 @@ async def _handle_digital_product_event(
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 
     with contextlib.suppress(Exception):
-        await bot.send_message(
-            telegram_id,
-            f"✅ Подписка активирована через Tribute!\n"
-            f"Товар: {product.name} | Тариф: {tier_label} | Срок: {product.hours}ч\n\n"
-            "Используйте /connect для получения конфигурации."
-        )
+        await bot.send_message(telegram_id, tribute_digital_activated(product.name, tier_label, product.hours))
 
     for admin_id in config.ADMINS:
         with contextlib.suppress(Exception):
             await bot.send_message(
                 admin_id,
-                f"Tribute: цифровой товар — `{telegram_id}` "
-                f"«{product.name}» ({tier_label}, {product.hours}ч)",
+                tribute_digital_admin_notify(telegram_id, product.name, tier_label, product.hours),
                 parse_mode="Markdown",
             )
 
@@ -196,10 +191,7 @@ def create_tribute_app(bot: Bot) -> FastAPI:
             # Подписка действует до expires_at — check_subscriptions удалит профили при истечении
             logger.info(f"ℹ️ Tribute 'cancelled_subscription': user {telegram_id} — will expire naturally")
             with contextlib.suppress(Exception):
-                await bot.send_message(
-                    telegram_id,
-                    "ℹ️ Подписка Tribute отменена. Доступ сохраняется до окончания оплаченного периода."
-                )
+                await bot.send_message(telegram_id, TRIBUTE_CANCELLED)
         elif event_name == "new_digital_product":
             product_name = payload.get("name") or payload.get("product_name", "")
             product = _find_digital_product(product_name)
