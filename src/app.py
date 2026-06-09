@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import secrets
 import sys
 import warnings
 from datetime import datetime, timedelta
@@ -169,6 +170,7 @@ async def update_admins_status():
                         datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
                     ),
                     subscription_tier=SubscriptionTier(config.TRIAL_TIER),
+                    referral_code=secrets.token_urlsafe(8),
                 )
                 session.add(new_admin)
         session.commit()
