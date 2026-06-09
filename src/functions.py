@@ -318,7 +318,15 @@ class XUIAPI:
             logger.error(f"🛑 update_client_expiry: client {email!r} not found")
             return False
 
-        payload = {**current_client, "email": email, "expiryTime": expiry_ms, "enable": True}
+        logger.info(current_client)
+        payload = {
+            "flow": current_client["flow"],
+            "limitIp": current_client["limitIp"],
+            "totalGB": current_client["totalGB"],
+            "email": email,
+            "expiryTime": expiry_ms,
+            "enable": True,
+        }
 
         try:
             url = f"{self._api_base()}/api/clients/update/{email}"
