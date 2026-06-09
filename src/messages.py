@@ -1,3 +1,5 @@
+import html as _html
+
 # ── Static ────────────────────────────────────────────────────────────────────
 
 HELP_TEXT = (
@@ -243,11 +245,11 @@ def support_user_received() -> str:
 
 
 def support_admin_notification(full_name: str, username: str | None, telegram_id: int) -> str:
-    uname = f"@{username}" if username else "нет"
+    uname = f"@{_html.escape(username)}" if username else "нет"
     return (
-        f"💬 *Обращение в поддержку*\n\n"
-        f"👤 `{full_name}` ({uname} | `{telegram_id}`)\n\n"
-        f"📝 *Сообщение:*"
+        f"💬 <b>Обращение в поддержку</b>\n\n"
+        f"👤 <code>{_html.escape(full_name)}</code> ({uname} | <code>{telegram_id}</code>)\n\n"
+        f"📝 <b>Сообщение:</b>"
     )
 
 

@@ -1236,7 +1236,7 @@ async def support_message_received(message: Message, state: FSMContext, bot: Bot
 
     for admin_id in config.ADMINS:
         try:
-            await bot.send_message(admin_id, header, parse_mode='Markdown')
+            await bot.send_message(admin_id, header, parse_mode='HTML')
             await bot.send_message(
                 admin_id, message.text,
                 reply_markup=reply_builder.as_markup()
