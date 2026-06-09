@@ -17,6 +17,7 @@ Key Features:
 - Subscription expiration notifications
 - **QR code generation for quick connection**
 - **New quick access commands: /renew, /connect, /stats, /help**
+- **Referral program** — users earn bonus days for every payment made by an invited friend
 - Administrative menu for user management and broadcast messages
 - Traffic usage statistics
 - **Automatic subscription date and profile fixing**
@@ -111,10 +112,8 @@ Inbound IDs from the 3x-ui panel. Protocol is detected automatically.
 |---|---|---|
 | `TRIBUTE_API_KEY` | — | API key from Tribute Dashboard (Settings → API Keys) |
 | `TRIBUTE_WEBHOOK_PORT` | `8081` | Port for the Tribute webhook server |
-| `TRIBUTE_BASIC_PLAN_NAME` | `Basic` | Exact name of the Basic plan in Tribute |
-| `TRIBUTE_PREMIUM_PLAN_NAME` | `Premium` | Exact name of the Premium plan in Tribute |
-| `TRIBUTE_BASIC_URL` | — | Share link for the Basic plan payment page (Dashboard → Share). If not set, Tribute button won't appear |
-| `TRIBUTE_PREMIUM_URL` | — | Same for Premium plan |
+| `TRIBUTE_SUBSCRIPTIONS` | `[]` | List of subscriptions `{name, tier, url, referral_reward_days}` — names must match exactly in Tribute Dashboard |
+| `TRIBUTE_DIGITAL_PRODUCTS` | `[]` | List of digital products `{name, tier, hours, url, referral_reward_days}` |
 
 Webhook URL to register in Tribute Dashboard:
 ```
@@ -269,6 +268,44 @@ VLESS URL format for Reality:
 ```
 vless://{client_id}@{host}:{port}?type=tcp&security=reality&pbk={public_key}&fp={fingerprint}&sni={sni}&sid={short_id}&spx={spider_x}#{remark}
 ```
+
+## Referral Program
+
+Every user gets a unique referral link: `https://t.me/<bot>?start=<code>`. When a new user registers via this link and later pays for a subscription through Tribute, the referrer automatically receives bonus days added to their subscription.
+
+**How to configure rewards:**
+
+Add a `referral_reward_days` field to each Tribute plan you want to reward. The recommended value is **5 days per purchased month** (e.g. 1-month plan → 5 days, 3-month plan → 15 days, etc.):
+
+```yaml
+TRIBUTE_SUBSCRIPTIONS:
+  - name: "Standard 1 Month"
+    tier: "standard"
+    url: "https://tribute.tg/..."
+    referral_reward_days: 5    # 1 month → 5 bonus days for referrer
+  - name: "Standard 3 Months"
+    tier: "standard"
+    url: "https://tribute.tg/..."
+    referral_reward_days: 15   # 3 months → 15 bonus days for referrer
+  - name: "Premium 1 Month"
+    tier: "premium"
+    url: "https://tribute.tg/..."
+    referral_reward_days: 5    # 1 month premium → 5 premium days for referrer
+
+TRIBUTE_DIGITAL_PRODUCTS:
+  - name: "VPN 1 Month"
+    tier: "standard"
+    hours: 720
+    url: "https://tribute.tg/..."
+    referral_reward_days: 5
+```
+
+- `referral_reward_days: 0` (default) — no reward is granted.
+- The reward is issued on every successful payment by the referral (including renewals).
+- **The bonus tier matches the purchased plan's tier**: if the referral buys `standard`, the referrer gets days on `standard`; if they buy `premium`, the referrer gets days on `premium`.
+- Users can view their referral link and stats via the **"👥 Referrals"** button in the main menu.
+
+> The referral program works **with Tribute only**. Telegram Payments purchases are not counted.
 
 ## Monitoring and Notifications
 
