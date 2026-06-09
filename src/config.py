@@ -1,8 +1,7 @@
-import json
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, YamlConfigSettingsSource
 
 from models import SubscriptionTier
 
@@ -28,12 +27,6 @@ class TributeSub(BaseModel):
 
 
 class Config(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=Path(__file__).parent / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
     BOT_TOKEN: str
     ADMINS: list[int] = Field(default_factory=list)
     XUI_API_URL: str = "http://localhost:54321"
@@ -71,19 +64,9 @@ class Config(BaseSettings):
     TRIBUTE_SUBSCRIPTIONS: list[TributeSub] = Field(default_factory=list)
     TRIBUTE_DIGITAL_PRODUCTS: list[DigitalProduct] = Field(default_factory=list)
 
-    @field_validator("TRIBUTE_SUBSCRIPTIONS", mode="before")
     @classmethod
-    def parse_tribute_subscriptions(cls, v):
-        if isinstance(v, str):
-            return json.loads(v)
-        return v or []
-
-    @field_validator("TRIBUTE_DIGITAL_PRODUCTS", mode="before")
-    @classmethod
-    def parse_digital_products(cls, v):
-        if isinstance(v, str):
-            return json.loads(v)
-        return v or []
+    def settings_customise_sources(cls, settings_cls, **kwargs):
+        return (YamlConfigSettingsSource(settings_cls, yaml_file=Path(__file__).parent / "config.yaml"),)
 
     @model_validator(mode="after")
     def check_no_duplicate_names(self) -> "Config":
@@ -94,13 +77,6 @@ class Config(BaseSettings):
         if len(sub_names) != len(set(sub_names)):
             raise ValueError("TRIBUTE_SUBSCRIPTIONS contains duplicate subscription names")
         return self
-
-    @field_validator("ADMINS", mode="before")
-    @classmethod
-    def parse_admins(cls, value):
-        if isinstance(value, str):
-            return [int(a) for a in value.split(",") if a.strip()]
-        return value or []
 
     def _parse_inbound_configs_raw(self, raw: str) -> list[dict]:
         result = []

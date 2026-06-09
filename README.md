@@ -26,14 +26,14 @@ Telegram бот для продажи и управления VPN-подписк
 
 ## Концепция тарифов и инбаундов
 
-Каждый тариф — это набор инбаундов, заданных в `.env`. Один пользователь получает профиль в **каждом** инбаунде своего тарифа. Все профили объединяются в одну подписку по `sub_id`: пользователь сканирует **один QR-код** и получает все серверы сразу.
+Каждый тариф — это набор инбаундов, заданных в `config.yaml`. Один пользователь получает профиль в **каждом** инбаунде своего тарифа. Все профили объединяются в одну подписку по `sub_id`: пользователь сканирует **один QR-код** и получает все серверы сразу.
 
 ```
-Basic:   BASIC_INBOUNDS=1        → один инбаунд
-Premium: PREMIUM_INBOUNDS=3      → добавляет второй поверх базового
+Basic:   STANDARD_INBOUNDS: "1"        → один инбаунд
+Premium: PREMIUM_INBOUNDS: "3"         → добавляет второй поверх базового
 ```
 
-Протокол каждого инбаунда определяется автоматически из панели 3x-ui. Добавить серверы — только правка `.env` и перезапуск бота.
+Протокол каждого инбаунда определяется автоматически из панели 3x-ui. Добавить серверы — только правка `config.yaml` и перезапуск бота.
 
 ## Установка и настройка
 
@@ -63,10 +63,10 @@ uv venv && uv pip install -r requirements.txt
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
-3. Настройте переменные окружения:
+3. Настройте конфигурацию:
 
 ```bash
-cp src/.env.example src/.env  # отредактируйте под свои значения
+cp src/config.example.yaml src/config.yaml  # отредактируйте под свои значения
 ```
 
 4. Запустите бота:
@@ -76,29 +76,29 @@ source .venv/bin/activate
 python3 src/app.py
 ```
 
-### Настройка переменных окружения
+### Настройка конфигурации (`config.yaml`)
 
 #### Обязательные параметры
 
-| Переменная | Описание |
+| Ключ | Описание |
 |---|---|
 | `BOT_TOKEN` | Токен Telegram-бота от @BotFather |
-| `ADMINS` | ID администраторов через запятую |
+| `ADMINS` | Список ID администраторов, например `[123456789]` |
 | `XUI_API_URL` | URL панели 3X-UI (например: `http://ip:54321`) |
 | `XUI_API_TOKEN` | Bearer API-токен 3X-UI (Settings → API Keys → Generate API Key) |
 
 #### Параметры панели
 
-| Переменная | По умолчанию | Описание |
+| Ключ | По умолчанию | Описание |
 |---|---|---|
 | `XUI_BASE_PATH` | `/panel` | Базовый путь к API панели |
 | `XUI_SUB_PORT` | `54321` | Порт эндпоинта подписок (`/sub/`) |
-| `XUI_VERIFY_SSL` | `False` | Проверять SSL-сертификат панели (`True`/`False`) |
+| `XUI_VERIFY_SSL` | `false` | Проверять SSL-сертификат панели |
 | `SUBSCRIPTION_URL_BASE` | — | Хост для ссылок подписки. Если не задан — берётся из `XUI_API_URL` |
 
 #### Оплата (хотя бы один способ)
 
-| Переменная | Описание |
+| Ключ | Описание |
 |---|---|
 | `PAYMENT_TOKEN` | Платёжный токен от @BotFather (не нужен при использовании только Tribute) |
 
@@ -106,14 +106,14 @@ python3 src/app.py
 
 ID инбаундов из панели 3x-ui. Протокол определяется автоматически из панели.
 
-| Переменная | По умолчанию | Описание |
+| Ключ | По умолчанию | Описание |
 |---|---|---|
-| `BASIC_INBOUNDS` | — | ID инбаундов базового тарифа через запятую |
+| `STANDARD_INBOUNDS` | — | ID инбаундов базового тарифа через запятую |
 | `PREMIUM_INBOUNDS` | — | ID инбаундов премиум-тарифа (добавляются поверх базовых). Оставьте пустым, если premium не нужен |
 | `PREMIUM_PRICE_MULTIPLIER` | `1.5` | Цена Premium = цена Basic × коэффициент |
 | `PREMIUM_TRAFFIC_LIMIT_GB` | `0` | Лимит трафика для premium-клиента в ГБ (`0` = безлимит) |
 | `TRIAL_DAYS` | `3` | Длительность бесплатного пробного периода в днях |
-| `TRIAL_TIER` | `basic` | Тариф пробного периода (`basic` или `premium`) |
+| `TRIAL_TIER` | `standard` | Тариф пробного периода (`standard` или `premium`) |
 
 
 ## Команды бота
@@ -149,7 +149,7 @@ ID инбаундов из панели 3x-ui. Протокол определя
 ```
 ./
 ├── src/
-│   ├── .env.example              # Пример конфигурации
+│   ├── config.example.yaml       # Пример конфигурации
 │   ├── app.py                    # Точка входа, фоновые задачи
 │   ├── config.py                 # Конфигурация (Pydantic), get_inbound_configs()
 │   ├── database.py               # ORM-модели, migrate_database()
@@ -224,16 +224,14 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 
 2. Получите API-ключ: Tribute Dashboard → **⋮ → Settings → API Keys → Generate API Key**
 
-3. Пропишите переменные окружения:
+3. Пропишите ключи в `config.yaml`:
 
-   | Переменная | Описание |
+   | Ключ | Описание |
    |---|---|
    | `TRIBUTE_API_KEY` | API-ключ из Tribute Dashboard |
    | `TRIBUTE_WEBHOOK_PORT` | Порт webhook-сервера (по умолчанию `8081`) |
-   | `TRIBUTE_BASIC_PLAN_NAME` | Точное название базового плана в Tribute (по умолчанию `Basic`) |
-   | `TRIBUTE_PREMIUM_PLAN_NAME` | Точное название премиум-плана в Tribute (по умолчанию `Premium`) |
-   | `TRIBUTE_BASIC_URL` | Ссылка на страницу оплаты Basic-плана (Tribute Dashboard → «Поделиться»). Если не задана — кнопка «Оплатить через Tribute» в `/renew` не появляется |
-   | `TRIBUTE_PREMIUM_URL` | Аналогично для Premium-плана |
+   | `TRIBUTE_SUBSCRIPTIONS` | Список подписок `{name, tier, url}` — имена должны точно совпадать с планами в Tribute Dashboard |
+   | `TRIBUTE_DIGITAL_PRODUCTS` | Список цифровых товаров `{name, tier, hours, url}` |
 
 4. В разделе **API Keys** укажите URL вебхука:
    ```
@@ -263,7 +261,7 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 | Ссылки не приходят через `/connect` | Проверьте `XUI_SUB_PORT` и доступность эндпоинта `/sub/` |
 | Проблемы с платежами | Проверьте `PAYMENT_TOKEN` |
 | Tribute webhook не срабатывает | Проверьте `TRIBUTE_API_KEY` и доступность порта `TRIBUTE_WEBHOOK_PORT` извне |
-| Tribute: 401 Unauthorized | API-ключ в `.env` не совпадает с ключом в Tribute Dashboard |
+| Tribute: 401 Unauthorized | API-ключ в `config.yaml` не совпадает с ключом в Tribute Dashboard |
 | Расхождения expiry | Используйте «Проверить подписки» в админ-меню |
 | Некорректные даты | Используйте «Исправить профили» в админ-меню |
 | Ошибки базы данных | Проверьте права на запись в директорию с `users.db` |

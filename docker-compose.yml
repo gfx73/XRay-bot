@@ -1,7 +1,6 @@
 services:
   bot:
     build: .
-    env_file: ./src/.env
     volumes:
       - ./src:/app/src
       - ./users.db:/app/users.db

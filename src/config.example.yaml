@@ -1,0 +1,69 @@
+BOT_TOKEN: "Your-bot-token"
+#PAYMENT_TOKEN: "39054xxxx:LIVE:45xxx"  # payment token from @BotFather
+ADMINS: [1234567890]
+
+XUI_API_URL: "http://ip-or-domain:2053"
+XUI_BASE_PATH: "/panel"
+# API-токен из панели 3x-ui: Settings → API Keys → Generate API Key
+XUI_API_TOKEN: ""
+XUI_SUB_PORT: "2096"
+XUI_VERIFY_SSL: false
+
+SUBSCRIPTION_URL_BASE: "ip-or-domain"
+SUB_BASE_PATH: "/sub"
+
+# ──────────────────────────────────────────────────────────────
+# Система тарифов: ID инбаундов через запятую (из панели 3x-ui)
+# Протокол определяется автоматически из панели
+# ──────────────────────────────────────────────────────────────
+# standard-клиент (безлимит) — для всех тарифов
+STANDARD_INBOUNDS: "1"
+# wl-клиент (с лимитом) — только для premium, поверх standard
+# Оставьте пустым если premium-тир не нужен
+PREMIUM_INBOUNDS: "3"
+# Лимит трафика для wl-клиента в ГБ (0 = безлимит)
+PREMIUM_TRAFFIC_LIMIT_GB: 100
+# Лимит трафика для standard-клиента в ГБ (0 = безлимит)
+STANDARD_TRAFFIC_LIMIT_GB: 0
+# Лимит одновременных IP для standard-клиента (0 = безлимит)
+STANDARD_IP_LIMIT: 0
+# Лимит одновременных IP для premium/wl-клиента (0 = безлимит)
+PREMIUM_IP_LIMIT: 0
+
+PREMIUM_PRICE_MULTIPLIER: 1.5
+TRIAL_DAYS: 3
+TRIAL_TIER: "standard"
+
+# ──────────────────────────────────────────────────────────────
+# Tribute (опционально — второй способ оплаты через tribute.tg)
+# Как получить API-ключ:
+#   Tribute Dashboard → ⋮ → Settings → API Keys → Generate API Key
+# Webhook URL прописать там же:
+#   https://your-domain.com:8081/tribute/webhook
+# ──────────────────────────────────────────────────────────────
+TRIBUTE_API_KEY: ""
+TRIBUTE_WEBHOOK_PORT: 8081
+
+# Подписки Tribute: список объектов {name, tier, url}
+# name: точное название плана в Tribute Dashboard
+# tier: standard | premium
+# url: ссылка «Поделиться» из Tribute Dashboard
+# Если список пуст — кнопки подписок Tribute не появляются в боте
+TRIBUTE_SUBSCRIPTIONS: []
+#TRIBUTE_SUBSCRIPTIONS:
+#  - name: "Standart"
+#    tier: "standard"
+#    url: "https://tribute.tg/..."
+#  - name: "Premium"
+#    tier: "premium"
+#    url: "https://tribute.tg/..."
+
+# Цифровые товары: список объектов {name, tier, hours, url}
+# tier: standard | premium  |  hours: срок подписки в часах
+# url опционален — если задан, кнопка товара появится в меню «Продлить»
+TRIBUTE_DIGITAL_PRODUCTS: []
+#TRIBUTE_DIGITAL_PRODUCTS:
+#  - name: "VPN 1 Month"
+#    tier: "standard"
+#    hours: 720
+#    url: "https://tribute.tg/..."
