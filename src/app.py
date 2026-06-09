@@ -127,10 +127,10 @@ async def _check_user_subscription(bot, user, now: datetime):
             except Exception as e:
                 logger.warning(f"⚠️ Notification error: {e}")
 
-async def send_daily_backup(bot: Bot):
-    """Ежедневно отправляет бэкап БД всем администраторам."""
+async def send_regular_backup(bot: Bot):
+    """Регулярно отправляет бэкап БД всем администраторам."""
     while True:
-        await asyncio.sleep(86400)
+        await asyncio.sleep(21600)
         try:
             db_path = os.path.abspath(engine.url.database)
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -231,7 +231,7 @@ async def main():
     server = None
     other_tasks = [
         asyncio.create_task(check_subscriptions(bot)),
-        asyncio.create_task(send_daily_backup(bot)),
+        asyncio.create_task(send_regular_backup(bot)),
     ]
 
     if config.TRIBUTE_API_KEY:
