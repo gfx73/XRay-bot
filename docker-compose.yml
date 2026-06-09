@@ -6,3 +6,8 @@ services:
       - ./users.db:/app/users.db
     restart: unless-stopped
     network_mode: host
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
