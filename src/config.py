@@ -8,6 +8,7 @@ from models import SubscriptionTier
 
 class DigitalProduct(BaseModel):
     name: str
+    button_title: str = ""
     tier: SubscriptionTier
     hours: int
     url: str = ""
@@ -73,6 +74,9 @@ class Config(BaseSettings):
 
     @model_validator(mode="after")
     def check_no_duplicate_names(self) -> "Config":
+        product_names = [p.name for p in self.TRIBUTE_DIGITAL_PRODUCTS]
+        if len(product_names) != len(set(product_names)):
+            raise ValueError("TRIBUTE_DIGITAL_PRODUCTS contains duplicate product names")
         sub_names = [s.name for s in self.TRIBUTE_SUBSCRIPTIONS]
         if len(sub_names) != len(set(sub_names)):
             raise ValueError("TRIBUTE_SUBSCRIPTIONS contains duplicate subscription names")

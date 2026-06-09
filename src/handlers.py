@@ -413,8 +413,9 @@ def _build_period_keyboard(tier: SubscriptionTier):
     else:
         products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == tier and p.url]
         for product in products:
+            title = product.button_title or product.name
             price_text = f" — {product.price} руб." if product.price > 0 else ""
-            builder.button(text=f"🛒 {product.name}{price_text} →", url=product.url)
+            builder.button(text=f"🛒 {title}{price_text} →", url=product.url)
 
         subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == tier and s.url]
         for sub in subs:

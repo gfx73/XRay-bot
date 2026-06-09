@@ -69,13 +69,15 @@ TRIBUTE_SUBSCRIPTIONS: []
 # Имена должны быть уникальны в рамках одного тира (standard/premium)
 TRIBUTE_DIGITAL_PRODUCTS: []
 #TRIBUTE_DIGITAL_PRODUCTS:
-#  - name: "1 месяц"
+#  - name: "VPN Standard 1 Month"   # точное название товара в Tribute (уникально)
+#    button_title: "1 месяц"        # текст кнопки в боте (опционально, иначе берётся name)
 #    tier: "standard"
 #    hours: 720
 #    price: 199
 #    url: "https://tribute.tg/..."
 #    referral_reward_hours: 120
-#  - name: "3 месяца (-11%)"
+#  - name: "VPN Standard 3 Months"
+#    button_title: "3 месяца (-11%)"
 #    tier: "standard"
 #    hours: 2160
 #    price: 530
