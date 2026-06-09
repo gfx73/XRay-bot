@@ -20,7 +20,7 @@ from database import (
     validate_and_fix_subscription_date,
 )
 from functions import delete_client_by_email
-from handlers import setup_handlers
+from handlers import ThrottlingMiddleware, setup_handlers
 from messages import PREM_EXPIRY_WARNING, SUB_EXPIRED, SUB_EXPIRY_WARNING
 from models import SlotName, SubscriptionTier, UserProfiles
 from tribute_webhook import create_tribute_app
@@ -209,6 +209,9 @@ async def main():
 
     try:
         setup_handlers(dp)
+        throttle = ThrottlingMiddleware()
+        dp.message.middleware(throttle)
+        dp.callback_query.middleware(throttle)
         logger.info("✅ Handlers registered")
     except Exception as e:
         logger.error(f"❌ Handler registration error: {e}")

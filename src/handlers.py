@@ -4,7 +4,9 @@ import io
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 import qrcode
 from aiogram import Bot, Dispatcher, F, Router
@@ -76,6 +78,47 @@ from messages import (
 from models import SlotName, SubscriptionTier, UserProfiles
 
 logger = logging.getLogger(__name__)
+
+_THROTTLE_RATE = 1.0  # seconds between actions per user
+
+
+class ThrottlingMiddleware:
+    """Limits each user to one bot action per second across messages and callbacks."""
+
+    def __init__(self) -> None:
+        self._last: dict[int, float] = {}
+
+    def _prune(self) -> None:
+        cutoff = time.monotonic() - 60.0
+        expired = [uid for uid, ts in self._last.items() if ts < cutoff]
+        for uid in expired:
+            del self._last[uid]
+
+    async def __call__(
+        self,
+        handler: Callable,
+        event: Message | CallbackQuery,
+        data: dict,
+    ) -> Any:
+        # Payment events must never be throttled
+        if isinstance(event, Message) and event.successful_payment is not None:
+            return await handler(event, data)
+
+        user = data.get("event_from_user")
+        if user is None:
+            return await handler(event, data)
+
+        now = time.monotonic()
+        if now - self._last.get(user.id, 0.0) < _THROTTLE_RATE:
+            if isinstance(event, CallbackQuery):
+                await event.answer()  # clear the spinner; no alert
+            return
+
+        if len(self._last) > 10_000:
+            self._prune()
+        self._last[user.id] = now
+        return await handler(event, data)
+
 
 router = Router()
 
