@@ -246,7 +246,7 @@ def support_admin_notification(full_name: str, username: str | None, telegram_id
     uname = f"@{username}" if username else "нет"
     return (
         f"💬 *Обращение в поддержку*\n\n"
-        f"👤 {full_name} ({uname} | `{telegram_id}`)\n\n"
+        f"👤 `{full_name}` ({uname} | `{telegram_id}`)\n\n"
         f"📝 *Сообщение:*"
     )
 
