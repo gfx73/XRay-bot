@@ -159,25 +159,25 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
     now = datetime.utcnow()
     prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
     std_active = bool(user.subscription_end and user.subscription_end > now)
-    status = "Активна" if std_active or prem_active else "Истекла"
-    if prem_active:
-        expire_date = user.premium_end.strftime("%d-%m-%Y %H:%M")
-    elif std_active:
-        expire_date = user.subscription_end.strftime("%d-%m-%Y %H:%M")
-    else:
-        expire_date = status
-    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
-    tier_label = TIER_LABELS.get(tier, tier.value)
+
+    std_expiry = user.subscription_end.strftime("%d-%m-%Y %H:%M") if user.subscription_end else "—"
+    std_status = "Активна" if std_active else "Истекла"
+    std_line = f"**📦 Standard**: `{std_status}` (до `{std_expiry}`)"
 
     text = (
         f"**Имя профиля**: `{user.full_name}`\n"
         f"**Id**: `{user.telegram_id}`\n"
-        f"**Подписка**: `{status}` ({tier_label})\n"
-        f"**Дата окончания подписки**: `{expire_date}`"
+        f"{std_line}"
     )
 
+    if config.has_premium_inbounds():
+        prem_expiry = user.premium_end.strftime("%d-%m-%Y %H:%M") if getattr(user, 'premium_end', None) else "—"
+        prem_status = "Активна" if prem_active else "Истекла"
+        text += f"\n**⭐ Premium**: `{prem_status}` (до `{prem_expiry}`)"
+
+    any_active = std_active or prem_active
     builder = InlineKeyboardBuilder()
-    builder.button(text="💵 Продлить" if status == "Активна" else "💵 Оплатить", callback_data="renew_sub")
+    builder.button(text="💵 Продлить" if any_active else "💵 Оплатить", callback_data="renew_sub")
     builder.button(text="✅ Подключить", callback_data="connect")
     builder.button(text="📊 Статистика", callback_data="stats")
     builder.button(text="ℹ️ Помощь", callback_data="help")
