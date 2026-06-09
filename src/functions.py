@@ -320,6 +320,7 @@ class XUIAPI:
 
         logger.info(current_client)
         payload = {
+            "id": current_client.get("uuid", ""),
             "flow": current_client["flow"],
             "limitIp": current_client["limitIp"],
             "totalGB": current_client["totalGB"],
