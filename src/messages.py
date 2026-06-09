@@ -229,3 +229,31 @@ def tribute_digital_admin_notify(telegram_id: int, product_name: str, tier_label
         f"🔔 Tribute: цифровой товар — `{telegram_id}` "
         f"«{product_name}» ({tier_label}, {hours}ч)"
     )
+
+
+SUPPORT_ASK_TEXT = (
+    "💬 *Поддержка*\n\n"
+    "Опишите вашу проблему или вопрос — мы ответим в ближайшее время.\n\n"
+    "✏️ Напишите ваше сообщение:"
+)
+
+
+def support_user_received() -> str:
+    return "✅ Ваше сообщение отправлено в поддержку. Мы ответим вам в ближайшее время."
+
+
+def support_admin_notification(full_name: str, username: str | None, telegram_id: int) -> str:
+    uname = f"@{username}" if username else "нет"
+    return (
+        f"💬 *Обращение в поддержку*\n\n"
+        f"👤 {full_name} ({uname} | `{telegram_id}`)\n\n"
+        f"📝 *Сообщение:*"
+    )
+
+
+def support_reply_sent() -> str:
+    return "✅ Ответ отправлен пользователю."
+
+
+def support_reply_received(text: str) -> str:
+    return f"💬 *Ответ от поддержки:*\n\n{text}"

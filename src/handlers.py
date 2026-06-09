@@ -3,6 +3,7 @@ import contextlib
 import io
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 
 import qrcode
@@ -55,6 +56,7 @@ from functions import (
 from messages import (
     CONNECT_INSTRUCTIONS,
     HELP_TEXT,
+    SUPPORT_ASK_TEXT,
     admin_menu_text,
     admin_payment_notification,
     broadcast_result,
@@ -65,6 +67,10 @@ from messages import (
     fix_profiles_result,
     network_stats_text,
     payment_success,
+    support_admin_notification,
+    support_reply_received,
+    support_reply_sent,
+    support_user_received,
     welcome,
 )
 from models import SlotName, SubscriptionTier, UserProfiles
@@ -92,6 +98,22 @@ class AdminStates(StatesGroup):
     REMOVE_TIME_AMOUNT = State()
     SEND_MESSAGE_TARGET = State()
     DELETE_USER = State()
+    SUPPORT_REPLY = State()
+
+
+class SupportStates(StatesGroup):
+    WAITING_MESSAGE = State()
+
+
+_support_cooldowns: dict[int, float] = {}
+SUPPORT_COOLDOWN_SECONDS = 60
+
+
+def _prune_support_cooldowns() -> None:
+    cutoff = time.monotonic() - SUPPORT_COOLDOWN_SECONDS
+    expired = [uid for uid, ts in _support_cooldowns.items() if ts < cutoff]
+    for uid in expired:
+        del _support_cooldowns[uid]
 
 
 def split_text(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list:
@@ -196,6 +218,7 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
     builder.button(text="✅ Подключить", callback_data="connect")
     builder.button(text="📊 Статистика", callback_data="stats")
     builder.button(text="ℹ️ Помощь", callback_data="help")
+    builder.button(text="💬 Поддержка", callback_data="support")
 
     if user.is_admin:
         builder.button(text="⚠️ Админ. меню", callback_data="admin_menu")
@@ -1172,9 +1195,102 @@ async def admin_confirm_delete_user(callback: CallbackQuery):
         await callback.message.answer(f"❌ Ошибка при удалении: {e!s}")
 
 
-@router.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: CallbackQuery, bot: Bot):
+# ────────────────────────────────────────────────────────────
+# Поддержка
+# ────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "support")
+async def support_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="back_to_menu")
+    await callback.message.edit_text(
+        SUPPORT_ASK_TEXT, parse_mode='Markdown', reply_markup=builder.as_markup()
+    )
+    await state.set_state(SupportStates.WAITING_MESSAGE)
+
+
+@router.message(SupportStates.WAITING_MESSAGE)
+async def support_message_received(message: Message, state: FSMContext, bot: Bot):
+    now = time.monotonic()
+    last = _support_cooldowns.get(message.from_user.id, 0)
+    if now - last < SUPPORT_COOLDOWN_SECONDS:
+        remaining = int(SUPPORT_COOLDOWN_SECONDS - (now - last))
+        await state.clear()
+        await message.answer(f"⏳ Следующее обращение можно отправить через {remaining} сек.")
+        await show_menu(bot, message.from_user.id)
+        return
+
+    _prune_support_cooldowns()
+    _support_cooldowns[message.from_user.id] = now
+    user = await get_user(message.from_user.id)
+    await state.clear()
+
+    header = support_admin_notification(
+        user.full_name if user else message.from_user.full_name,
+        message.from_user.username,
+        message.from_user.id,
+    )
+    reply_builder = InlineKeyboardBuilder()
+    reply_builder.button(text="💬 Ответить", callback_data=f"support_reply_{message.from_user.id}")
+
+    for admin_id in config.ADMINS:
+        try:
+            await bot.send_message(admin_id, header, parse_mode='Markdown')
+            await bot.send_message(
+                admin_id, message.text,
+                reply_markup=reply_builder.as_markup()
+            )
+        except Exception as e:
+            logger.error(f"🛑 Failed to send support notification to admin {admin_id}: {e}")
+
+    await message.answer(support_user_received())
+    await show_menu(bot, message.from_user.id)
+
+
+@router.callback_query(F.data.startswith("support_reply_"))
+async def support_reply_start(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
+    target_user_id = int(callback.data.split("_")[2])
+    await state.update_data(support_user_id=target_user_id)
+    await callback.message.answer(
+        f"✏️ Введите ответ пользователю `{target_user_id}`:\n\n_(отправьте /cancel для отмены)_",
+        parse_mode='Markdown'
+    )
+    await state.set_state(AdminStates.SUPPORT_REPLY)
+
+
+@router.message(AdminStates.SUPPORT_REPLY)
+async def support_reply_send(message: Message, state: FSMContext, bot: Bot):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Ответ отменён.")
+        return
+
+    data = await state.get_data()
+    target_user_id = data['support_user_id']
+    await state.clear()
+
+    try:
+        await bot.send_message(
+            target_user_id,
+            support_reply_received(message.text),
+            parse_mode='Markdown'
+        )
+        await message.answer(support_reply_sent())
+    except Exception as e:
+        logger.error(f"🛑 Failed to send support reply to user {target_user_id}: {e}")
+        await message.answer(f"❌ Не удалось отправить ответ пользователю `{target_user_id}`")
+
+
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await callback.answer()
+    await state.clear()
     if callback.message.photo:
         await callback.message.delete()
         await show_menu(bot, callback.from_user.id)
