@@ -323,6 +323,7 @@ class XUIAPI:
         try:
             url = f"{self._api_base()}/api/clients/update/{email}"
             async with self.session.post(url, json=payload) as resp:
+                logger.info(f"update expiry payload: {payload}")
                 if resp.status != 200:
                     logger.error(f"🛑 Update client expiry failed: status={resp.status}")
                     return False
