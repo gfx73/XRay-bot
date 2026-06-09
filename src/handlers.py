@@ -3,6 +3,7 @@ import contextlib
 import io
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -150,6 +151,7 @@ class SupportStates(StatesGroup):
 
 _support_cooldowns: dict[int, float] = {}
 SUPPORT_COOLDOWN_SECONDS = 60
+_connect_locks: dict[int, asyncio.Lock] = {}
 
 
 def _prune_support_cooldowns() -> None:
@@ -244,8 +246,9 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
     std_status = "Активна" if std_active else "Истекла"
     std_line = f"*📦 Стандартный*: `{std_status}` (до `{std_expiry}`)"
 
+    safe_name = user.full_name.replace("`", "‘")
     text = (
-        f"*Имя профиля*: `{user.full_name}`\n"
+        f"*Имя профиля*: `{safe_name}`\n"
         f"*Id*: `{user.telegram_id}`\n"
         f"{std_line}"
     )
@@ -579,7 +582,7 @@ async def process_successful_payment(message: Message, bot: Bot):
         if tier == SubscriptionTier.PREMIUM:
             action_type = "продлена" if (getattr(user, 'premium_end', None) and user.premium_end > now) else "куплена"
         else:
-            action_type = "продлена" if user.subscription_end > now else "куплена"
+            action_type = "продлена" if (user.subscription_end and user.subscription_end > now) else "куплена"
 
         success = await update_subscription(message.from_user.id, months, tier=tier)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
@@ -633,23 +636,26 @@ async def connect_profile(callback: CallbackQuery):
     tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
 
     is_new: bool = False
-    if not _has_profiles(user):
-        await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
-        new_profiles = await _create_client_for_tier(
-            user.telegram_id, user.subscription_end, tier,
-            premium_end=getattr(user, 'premium_end', None),
-        )
-        if new_profiles:
-            with Session() as session:
-                db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
-                if db_user:
-                    db_user.profiles = new_profiles
-                    session.commit()
-            user = await get_user(user.telegram_id)
-            is_new = True
-        else:
-            await callback.message.answer("🛑 Ошибка при создании профиля. Попробуйте позже.")
-            return
+    lock = _connect_locks.setdefault(user.telegram_id, asyncio.Lock())
+    async with lock:
+        user = await get_user(user.telegram_id)
+        if not _has_profiles(user):
+            await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
+            new_profiles = await _create_client_for_tier(
+                user.telegram_id, user.subscription_end, tier,
+                premium_end=getattr(user, 'premium_end', None),
+            )
+            if new_profiles:
+                with Session() as session:
+                    db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
+                    if db_user:
+                        db_user.profiles = new_profiles
+                        session.commit()
+                user = await get_user(user.telegram_id)
+                is_new = True
+            else:
+                await callback.message.answer("🛑 Ошибка при создании профиля. Попробуйте позже.")
+                return
 
     profiles = _get_profiles(user)
     if not profiles:
@@ -792,6 +798,10 @@ async def admin_backup_db(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_add_time")
 async def admin_add_time_start(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     await callback.message.answer("Введите Telegram ID пользователя:")
     await state.set_state(AdminStates.ADD_TIME_USER)
@@ -799,6 +809,10 @@ async def admin_add_time_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.ADD_TIME_USER)
 async def admin_add_time_user(message: Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.")
+        return
     try:
         user_id = int(message.text)
         await state.update_data(user_id=user_id)
@@ -810,6 +824,10 @@ async def admin_add_time_user(message: Message, state: FSMContext):
 
 @router.message(AdminStates.ADD_TIME_AMOUNT)
 async def admin_add_time_amount(message: Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.")
+        return
     data = await state.get_data()
     user_id = data['user_id']
     parts = message.text.split()
@@ -830,7 +848,7 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
         with Session() as session:
             user = session.query(User).filter_by(telegram_id=user_id).first()
             if user:
-                if user.subscription_end > datetime.utcnow():
+                if user.subscription_end and user.subscription_end > datetime.utcnow():
                     user.subscription_end += timedelta(seconds=total_seconds)
                 else:
                     user.subscription_end = datetime.utcnow() + timedelta(seconds=total_seconds)
@@ -856,6 +874,10 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_remove_time")
 async def admin_remove_time_start(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     await callback.message.answer("Введите Telegram ID пользователя:")
     await state.set_state(AdminStates.REMOVE_TIME_USER)
@@ -863,6 +885,10 @@ async def admin_remove_time_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.REMOVE_TIME_USER)
 async def admin_remove_time_user(message: Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.")
+        return
     try:
         user_id = int(message.text)
         await state.update_data(user_id=user_id)
@@ -874,6 +900,10 @@ async def admin_remove_time_user(message: Message, state: FSMContext):
 
 @router.message(AdminStates.REMOVE_TIME_AMOUNT)
 async def admin_remove_time_amount(message: Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.")
+        return
     data = await state.get_data()
     user_id = data['user_id']
     parts = message.text.split()
@@ -919,6 +949,11 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_user_list")
 async def admin_user_list(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ С подпиской", callback_data="user_list_active")
     builder.button(text="🛑 Без подписки", callback_data="user_list_inactive")
@@ -930,8 +965,12 @@ async def admin_user_list(callback: CallbackQuery):
 
 @router.callback_query(F.data == "user_list_active")
 async def handle_user_list_active(callback: CallbackQuery):
-    users = await get_all_users(with_subscription=True)
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
+    users = await get_all_users(with_subscription=True)
     if not users:
         await callback.answer("Нет пользователей с активной подпиской")
         return
@@ -951,6 +990,10 @@ async def handle_user_list_active(callback: CallbackQuery):
 
 @router.callback_query(F.data == "user_list_inactive")
 async def handle_user_list_inactive(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     users = await get_all_users(with_subscription=False)
     if not users:
@@ -970,6 +1013,11 @@ async def handle_user_list_inactive(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_send_message")
 async def admin_send_message_start(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ С подпиской", callback_data="target_active")
     builder.button(text="🛑 Без подписки", callback_data="target_inactive")
@@ -981,6 +1029,10 @@ async def admin_send_message_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("target_"))
 async def admin_send_message_target(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     target = callback.data.split("_")[1]
     await state.update_data(target=target)
@@ -990,6 +1042,10 @@ async def admin_send_message_target(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.SEND_MESSAGE)
 async def admin_send_message(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("⚠️ Для рассылки отправьте текстовое сообщение.")
+        await state.clear()
+        return
     data = await state.get_data()
     target = data['target']
     text = message.text
@@ -1016,6 +1072,11 @@ async def admin_send_message(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data == "static_profiles_menu")
 async def static_profiles_menu(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.button(text="🆕 Добавить статический профиль", callback_data="static_profile_add")
     builder.button(text="📋 Вывести статические профили", callback_data="static_profile_list")
@@ -1026,6 +1087,10 @@ async def static_profiles_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "static_profile_add")
 async def static_profile_add(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     await callback.message.answer("Введите имя для статического профиля:")
     await state.set_state(AdminStates.CREATE_STATIC_PROFILE)
@@ -1033,7 +1098,27 @@ async def static_profile_add(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.CREATE_STATIC_PROFILE)
 async def process_static_profile_name(message: Message, state: FSMContext):
-    profile_name = message.text
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.")
+        return
+    profile_name = (message.text or "").strip()
+    if not profile_name:
+        await message.answer("❌ Имя не может быть пустым.")
+        await state.clear()
+        return
+    if len(profile_name) > 64:
+        await message.answer("❌ Имя слишком длинное (максимум 64 символа).")
+        await state.clear()
+        return
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+", profile_name):
+        await message.answer("❌ Допустимы только буквы (a-z, A-Z), цифры, _ и -.")
+        await state.clear()
+        return
+    if profile_name.startswith("user_"):
+        await message.answer("❌ Имя не может начинаться с 'user_'.")
+        await state.clear()
+        return
     profile_data = await create_static_client(profile_name)
 
     if profile_data:
@@ -1068,9 +1153,14 @@ async def process_static_profile_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "static_profile_list")
 async def static_profile_list(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
+    await callback.answer()
     profiles = await get_static_profiles()
     if not profiles:
-        await callback.answer("Нет статических профилей")
+        await callback.message.answer("Нет статических профилей")
         return
 
     for profile in profiles:
@@ -1090,10 +1180,15 @@ async def static_profile_list(callback: CallbackQuery):
             reply_markup=builder.as_markup(),
             parse_mode='Markdown'
         )
+        await asyncio.sleep(0.05)
 
 
 @router.callback_query(F.data.startswith("delete_static_"))
 async def handle_delete_static_profile(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     try:
         profile_id = int(callback.data.split("_")[-1])
         with Session() as session:
@@ -1113,6 +1208,10 @@ async def handle_delete_static_profile(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_network_stats")
 async def network_stats(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     stats = await get_global_stats()
     upload = f"{stats.get('upload', 0) / 1024 / 1024:.2f}"
     upload_size = 'MB' if int(float(upload)) < 1024 else 'GB'
@@ -1132,6 +1231,10 @@ async def network_stats(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_fix_profiles")
 async def admin_fix_profiles(callback: CallbackQuery):
     """Исправляет все профили с неправильными датами."""
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer("⏳ Исправляем профили...")
     try:
         fixed_db_count = await fix_all_subscription_dates()
@@ -1162,6 +1265,10 @@ async def admin_fix_profiles(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_check_subscriptions")
 async def admin_check_subscriptions(callback: CallbackQuery):
     """Проверяет и исправляет расхождения между 3x-ui и базой данных."""
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer("⏳ Проверяем подписки...")
     try:
         stats = await check_and_fix_subscriptions()
@@ -1178,6 +1285,10 @@ async def admin_check_subscriptions(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_delete_user")
 async def admin_delete_user_start(callback: CallbackQuery, state: FSMContext):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     await callback.message.answer(
         "🗑️ *Удаление пользователя*\n\nВведите Telegram ID пользователя для удаления:",
@@ -1199,10 +1310,11 @@ async def admin_delete_user_process(message: Message, state: FSMContext):
 
         username = f"@{user.username}" if user.username else "отсутствует"
         has_profile = _has_profiles(user)
+        sub_end_str = user.subscription_end.strftime('%d-%m-%Y %H:%M') if user.subscription_end else "—"
         text = delete_user_confirm(
             user.full_name, username, user.telegram_id,
             user.registration_date.strftime('%d-%m-%Y %H:%M'),
-            user.subscription_end.strftime('%d-%m-%Y %H:%M'),
+            sub_end_str,
             has_profile,
         )
         builder = InlineKeyboardBuilder()
@@ -1221,6 +1333,10 @@ async def admin_delete_user_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("confirm_delete_"))
 async def admin_confirm_delete_user(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user or not user.is_admin:
+        await callback.answer("🛑 Доступ запрещен!")
+        return
     await callback.answer()
     try:
         telegram_id = int(callback.data.split("_")[2])
@@ -1255,6 +1371,10 @@ async def support_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(SupportStates.WAITING_MESSAGE)
 async def support_message_received(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await state.clear()
+        await message.answer("⚠️ Пожалуйста, отправьте текстовое сообщение.")
+        return
     now = time.monotonic()
     last = _support_cooldowns.get(message.from_user.id, 0)
     if now - last < SUPPORT_COOLDOWN_SECONDS:

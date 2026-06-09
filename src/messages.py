@@ -1,5 +1,10 @@
 import html as _html
 
+
+def _esc(s: str) -> str:
+    return s.replace("`", "'")
+
+
 # ── Static ────────────────────────────────────────────────────────────────────
 
 HELP_TEXT = (
@@ -92,7 +97,7 @@ def admin_payment_notification(
 ) -> str:
     return (
         f"💰 {action_type.capitalize()} подписка — "
-        f"`{full_name}` | `{telegram_id}` "
+        f"`{_esc(full_name)}` | `{telegram_id}` "
         f"на {months} {suffix} ({tier_label}) — *{final_price}₽*"
     )
 
@@ -177,7 +182,7 @@ def delete_user_confirm(
 ) -> str:
     return (
         f"⚠️ *Подтвердите удаление пользователя:*\n\n"
-        f"👤 Имя: `{full_name}`\n"
+        f"👤 Имя: `{_esc(full_name)}`\n"
         f"📱 Username: `{username}`\n"
         f"🆔 Telegram ID: `{telegram_id}`\n"
         f"📅 Регистрация: `{reg_date}`\n"
