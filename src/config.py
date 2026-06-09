@@ -1,9 +1,23 @@
+import json
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from models import SubscriptionTier
+
+
+class DigitalProduct(BaseModel):
+    name: str
+    tier: SubscriptionTier
+    hours: int
+
+    @field_validator("hours")
+    @classmethod
+    def check_hours(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("hours must be > 0")
+        return v
 
 
 class Config(BaseSettings):
@@ -51,6 +65,21 @@ class Config(BaseSettings):
     TRIBUTE_PREMIUM_PLAN_NAME: str = "Premium"
     TRIBUTE_BASIC_URL: str = ""
     TRIBUTE_PREMIUM_URL: str = ""
+    TRIBUTE_DIGITAL_PRODUCTS: list[DigitalProduct] = Field(default_factory=list)
+
+    @field_validator("TRIBUTE_DIGITAL_PRODUCTS", mode="before")
+    @classmethod
+    def parse_digital_products(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v or []
+
+    @model_validator(mode="after")
+    def check_no_duplicate_product_names(self) -> "Config":
+        names = [p.name for p in self.TRIBUTE_DIGITAL_PRODUCTS]
+        if len(names) != len(set(names)):
+            raise ValueError("TRIBUTE_DIGITAL_PRODUCTS contains duplicate product names")
+        return self
 
     @field_validator("ADMINS", mode="before")
     @classmethod

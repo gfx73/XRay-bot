@@ -116,30 +116,32 @@ async def delete_user_profile(telegram_id: int):
             session.commit()
             logger.info(f"✅ User profile deleted: {telegram_id}")
 
-async def update_subscription(telegram_id: int, months: int, tier: str | None = None):
+async def update_subscription(telegram_id: int, months: int = 0, tier: str | None = None, hours: int = 0):
     """Обновляет подписку с учётом текущего состояния.
 
     tier="basic"   → продлевает subscription_end, premium_end не трогает.
     tier="premium" → продлевает premium_end, subscription_end не трогает.
+    hours имеет приоритет над months; если оба 0 — ничего не добавляется.
     """
     with Session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if user:
             now = datetime.utcnow()
+            duration = timedelta(hours=hours) if hours else timedelta(days=months * 30)
             if tier == SubscriptionTier.PREMIUM:
                 # subscription_end считается от текущего subscription_end (если активен)
                 user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
                 if user.subscription_end > now:
-                    user.subscription_end += timedelta(days=months * 30)
+                    user.subscription_end += duration
                 else:
-                    user.subscription_end = now + timedelta(days=months * 30)
+                    user.subscription_end = now + duration
                 user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
                 # premium_end считается независимо — от текущего premium_end (если активен), иначе от now
                 current_prem = validate_and_fix_subscription_date(user.premium_end) if user.premium_end else now
                 if current_prem > now:
-                    user.premium_end = current_prem + timedelta(days=months * 30)
+                    user.premium_end = current_prem + duration
                 else:
-                    user.premium_end = now + timedelta(days=months * 30)
+                    user.premium_end = now + duration
                 user.premium_end = validate_and_fix_subscription_date(user.premium_end)
                 user.notified = False
                 user.premium_notified = False
@@ -147,16 +149,17 @@ async def update_subscription(telegram_id: int, months: int, tier: str | None = 
                 # Продлеваем только standard; premium_end не трогаем
                 user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
                 if user.subscription_end > now:
-                    user.subscription_end += timedelta(days=months * 30)
+                    user.subscription_end += duration
                 else:
-                    user.subscription_end = now + timedelta(days=months * 30)
+                    user.subscription_end = now + duration
                 user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
                 user.notified = False
             # Derive tier from currently active subscriptions
             has_active_premium = bool(user.premium_end and user.premium_end > now)
             user.subscription_tier = SubscriptionTier.PREMIUM if has_active_premium else SubscriptionTier.STANDARD
             session.commit()
-            logger.info(f"✅ Subscription updated for {telegram_id}: +{months} months, tier={tier}, "
+            duration_str = f"{hours}h" if hours else f"{months}mo"
+            logger.info(f"✅ Subscription updated for {telegram_id}: +{duration_str}, tier={tier}, "
                         f"subscription_end={user.subscription_end}, premium_end={user.premium_end}")
             return True
         return False

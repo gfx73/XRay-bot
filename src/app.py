@@ -242,6 +242,11 @@ async def main():
         ))
         other_tasks.append(asyncio.create_task(server.serve()))
         logger.info(f"ℹ️  Tribute webhook listening on port {config.TRIBUTE_WEBHOOK_PORT}")
+        if config.TRIBUTE_DIGITAL_PRODUCTS:
+            for p in config.TRIBUTE_DIGITAL_PRODUCTS:
+                logger.info(f"ℹ️  Tribute digital product: '{p.name}' → {p.tier}, {p.hours}h")
+        else:
+            logger.info("ℹ️  No Tribute digital products configured")
     else:
         logger.info("ℹ️  TRIBUTE_API_KEY not set — Tribute webhook disabled")
 

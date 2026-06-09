@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from fastapi import FastAPI, HTTPException, Request
 
-from config import config
+from config import DigitalProduct, config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,
@@ -49,6 +49,13 @@ def _resolve_tier(subscription_name: str) -> SubscriptionTier:
     return SubscriptionTier.STANDARD
 
 
+def _find_digital_product(name: str) -> DigitalProduct | None:
+    for product in config.TRIBUTE_DIGITAL_PRODUCTS:
+        if product.name == name:
+            return product
+    return None
+
+
 def _verify_signature(body: bytes, signature: str) -> bool:
     if not config.TRIBUTE_API_KEY:
         return False
@@ -64,22 +71,26 @@ def _months_suffix(months: int) -> str:
     return "месяцев"
 
 
-async def _handle_subscription_event(
-    event_name: str, payload: dict, telegram_id: int, bot: Bot
-) -> None:
-    """Handle newSubscription and renewedSubscription events."""
-    tier = _resolve_tier(payload.get("subscription_name", ""))
-    months = PERIOD_TO_MONTHS.get(payload.get("period", "monthly"), 1)
-    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
-    suffix = _months_suffix(months)
-
+async def _ensure_user(telegram_id: int, payload: dict) -> None:
     user = await get_user(telegram_id)
     if not user:
         username = payload.get("telegram_username")
         await create_user(telegram_id, str(telegram_id), username=username)
         logger.info(f"✅ Tribute: auto-created user {telegram_id}")
 
-    success = await update_subscription(telegram_id, months, tier=tier)
+
+async def _handle_subscription_event(
+    event_name: str, payload: dict, telegram_id: int, bot: Bot
+) -> None:
+    """Handle new_subscription and renewed_subscription events."""
+    tier = _resolve_tier(payload.get("subscription_name", ""))
+    months = PERIOD_TO_MONTHS.get(payload.get("period", "monthly"), 1)
+    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
+    suffix = _months_suffix(months)
+
+    await _ensure_user(telegram_id, payload)
+
+    success = await update_subscription(telegram_id, months=months, tier=tier)
     if not success:
         logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id}")
         return
@@ -89,7 +100,7 @@ async def _handle_subscription_event(
     except Exception as e:
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 
-    action = "продлена" if event_name == "renewedSubscription" else "активирована"
+    action = "продлена" if event_name == "renewed_subscription" else "активирована"
     with contextlib.suppress(Exception):
         await bot.send_message(
             telegram_id,
@@ -108,6 +119,46 @@ async def _handle_subscription_event(
             )
 
     logger.info(f"✅ Tribute '{event_name}': user {telegram_id}, tier={tier}, months={months}")
+
+
+async def _handle_digital_product_event(
+    product: DigitalProduct, payload: dict, telegram_id: int, bot: Bot
+) -> None:
+    """Handle new_digital_product events for a matched product."""
+    tier = product.tier
+    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
+
+    await _ensure_user(telegram_id, payload)
+
+    success = await update_subscription(telegram_id, hours=product.hours, tier=tier)
+    if not success:
+        logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id} (product='{product.name}')")
+        return
+
+    try:
+        await _sync_profiles(telegram_id, tier)
+    except Exception as e:
+        logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
+
+    with contextlib.suppress(Exception):
+        await bot.send_message(
+            telegram_id,
+            f"✅ Подписка активирована через Tribute!\n"
+            f"Товар: {product.name} | Тариф: {tier_label} | Срок: {product.hours}ч\n\n"
+            "Используйте /connect для получения конфигурации."
+        )
+
+    for admin_id in config.ADMINS:
+        with contextlib.suppress(Exception):
+            await bot.send_message(
+                admin_id,
+                f"Tribute: цифровой товар — `{telegram_id}` "
+                f"«{product.name}» ({tier_label}, {product.hours}ч)",
+                parse_mode="Markdown",
+            )
+
+    logger.info(f"✅ Tribute 'new_digital_product': user {telegram_id}, product='{product.name}', "
+                f"tier={tier}, hours={product.hours}")
 
 
 def create_tribute_app(bot: Bot) -> FastAPI:
@@ -138,18 +189,25 @@ def create_tribute_app(bot: Bot) -> FastAPI:
             logger.warning(f"⚠️ Tribute webhook '{event_name}': no telegram_user_id")
             return {"ok": True}
 
-        if event_name in ("newSubscription", "renewedSubscription"):
+        if event_name in ("new_subscription", "renewed_subscription"):
             await _handle_subscription_event(event_name, payload, telegram_id, bot)
-        elif event_name == "cancelledSubscription":
+        elif event_name == "cancelled_subscription":
             # Подписка действует до expires_at — check_subscriptions удалит профили при истечении
-            logger.info(f"ℹ️ Tribute 'cancelledSubscription': user {telegram_id} — will expire naturally")
+            logger.info(f"ℹ️ Tribute 'cancelled_subscription': user {telegram_id} — will expire naturally")
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     telegram_id,
                     "ℹ️ Подписка Tribute отменена. Доступ сохраняется до окончания оплаченного периода."
                 )
+        elif event_name == "new_digital_product":
+            product_name = payload.get("name") or payload.get("product_name", "")
+            product = _find_digital_product(product_name)
+            if product:
+                await _handle_digital_product_event(product, payload, telegram_id, bot)
+            else:
+                logger.info(f"ℹ️ Tribute 'new_digital_product': unrecognized product '{product_name}'")
         else:
-            logger.debug(f"ℹ️ Tribute: ignoring event '{event_name}'")
+            logger.info(f"ℹ️ Tribute: ignoring event '{event_name}'")
 
         return {"ok": True}
 
