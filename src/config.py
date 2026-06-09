@@ -11,7 +11,7 @@ class DigitalProduct(BaseModel):
     tier: SubscriptionTier
     hours: int
     url: str = ""
-    referral_reward_days: int = 0
+    referral_reward_hours: int = 0
 
     @field_validator("hours")
     @classmethod
@@ -25,7 +25,7 @@ class TributeSub(BaseModel):
     name: str
     tier: SubscriptionTier
     url: str
-    referral_reward_days: int = 0
+    referral_reward_hours: int = 0
 
 
 class Config(BaseSettings):

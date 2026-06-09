@@ -65,23 +65,23 @@ def _find_digital_product(name: str) -> DigitalProduct | None:
     return None
 
 
-async def _reward_referrer(buyer_id: int, reward_days: int, tier: SubscriptionTier, bot: Bot) -> None:
-    if reward_days <= 0:
+async def _reward_referrer(buyer_id: int, reward_hours: int, tier: SubscriptionTier, bot: Bot) -> None:
+    if reward_hours <= 0:
         return
     buyer = await get_user(buyer_id)
     if not buyer or not buyer.referred_by:
         return
     referrer_id = buyer.referred_by
-    success = await update_subscription(referrer_id, hours=reward_days * 24, tier=tier)
+    success = await update_subscription(referrer_id, hours=reward_hours, tier=tier)
     if not success:
         logger.warning(f"⚠️ Referral reward: update_subscription failed for referrer {referrer_id}")
         return
     tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
-    logger.info(f"✅ Referral reward: {reward_days}d {tier} → referrer {referrer_id} (buyer {buyer_id})")
+    logger.info(f"✅ Referral reward: {reward_hours}h {tier} → referrer {referrer_id} (buyer {buyer_id})")
     with contextlib.suppress(Exception):
         await bot.send_message(
             referrer_id,
-            referral_reward_received(reward_days, tier_label),
+            referral_reward_received(reward_hours, tier_label),
             parse_mode="Markdown",
         )
 
@@ -143,7 +143,7 @@ async def _handle_subscription_event(
                 parse_mode="Markdown",
             )
 
-    await _reward_referrer(telegram_id, sub.referral_reward_days if sub else 0, tier, bot)
+    await _reward_referrer(telegram_id, sub.referral_reward_hours if sub else 0, tier, bot)
     logger.info(f"✅ Tribute '{event_name}': user {telegram_id}, tier={tier}, months={months}")
 
 
@@ -177,7 +177,7 @@ async def _handle_digital_product_event(
                 parse_mode="Markdown",
             )
 
-    await _reward_referrer(telegram_id, product.referral_reward_days, product.tier, bot)
+    await _reward_referrer(telegram_id, product.referral_reward_hours, product.tier, bot)
     logger.info(f"✅ Tribute 'new_digital_product': user {telegram_id}, product='{product.name}', "
                 f"tier={tier}, hours={product.hours}")
 

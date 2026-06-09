@@ -44,31 +44,31 @@ TRIAL_TIER: "standard"
 TRIBUTE_API_KEY: ""
 TRIBUTE_WEBHOOK_PORT: 8081
 
-# Подписки Tribute: список объектов {name, tier, url, referral_reward_days}
+# Подписки Tribute: список объектов {name, tier, url, referral_reward_hours}
 # name: точное название плана в Tribute Dashboard
 # tier: standard | premium
 # url: ссылка «Поделиться» из Tribute Dashboard
-# referral_reward_days: сколько дней начислять рефереру при каждой оплате (0 = без награды)
+# referral_reward_hours: сколько часов начислять рефереру при каждой оплате (0 = без награды)
 # Если список пуст — кнопки подписок Tribute не появляются в боте
 TRIBUTE_SUBSCRIPTIONS: []
 #TRIBUTE_SUBSCRIPTIONS:
 #  - name: "Standart"
 #    tier: "standard"
 #    url: "https://tribute.tg/..."
-#    referral_reward_days: 7
+#    referral_reward_hours: 7
 #  - name: "Premium"
 #    tier: "premium"
 #    url: "https://tribute.tg/..."
-#    referral_reward_days: 10
+#    referral_reward_hours: 10
 
-# Цифровые товары: список объектов {name, tier, hours, url, referral_reward_days}
+# Цифровые товары: список объектов {name, tier, hours, url, referral_reward_hours}
 # tier: standard | premium  |  hours: срок подписки в часах
 # url опционален — если задан, кнопка товара появится в меню «Продлить»
-# referral_reward_days: сколько дней начислять рефереру при покупке товара (0 = без награды)
+# referral_reward_hours: сколько часов начислять рефереру при покупке товара (0 = без награды)
 TRIBUTE_DIGITAL_PRODUCTS: []
 #TRIBUTE_DIGITAL_PRODUCTS:
 #  - name: "VPN 1 Month"
 #    tier: "standard"
 #    hours: 720
 #    url: "https://tribute.tg/..."
-#    referral_reward_days: 7
+#    referral_reward_hours: 7

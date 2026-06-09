@@ -280,15 +280,15 @@ def referral_info_text(link: str, count: int) -> str:
     )
 
 
-def referral_reward_received(days: int, tier_label: str) -> str:
-    if days == 1:
-        suffix = "день"
-    elif days in (2, 3, 4):
-        suffix = "дня"
+def referral_reward_received(hours: int, tier_label: str) -> str:
+    if hours == 1:
+        suffix = "час"
+    elif hours in (2, 3, 4):
+        suffix = "часа"
     else:
-        suffix = "дней"
+        suffix = "часов"
     return (
         f"🎁 *Ваш реферал оплатил подписку!*\n\n"
         f"📦 Тариф: {tier_label}\n"
-        f"⏱ Вам начислено: *{days} {suffix}* подписки"
+        f"⏱ Вам начислено: *{hours} {suffix}* подписки"
     )

@@ -231,8 +231,8 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
    |---|---|
    | `TRIBUTE_API_KEY` | API-ключ из Tribute Dashboard |
    | `TRIBUTE_WEBHOOK_PORT` | Порт webhook-сервера (по умолчанию `8081`) |
-   | `TRIBUTE_SUBSCRIPTIONS` | Список подписок `{name, tier, url, referral_reward_days}` — имена должны точно совпадать с планами в Tribute Dashboard |
-   | `TRIBUTE_DIGITAL_PRODUCTS` | Список цифровых товаров `{name, tier, hours, url, referral_reward_days}` |
+   | `TRIBUTE_SUBSCRIPTIONS` | Список подписок `{name, tier, url, referral_reward_hours}` — имена должны точно совпадать с планами в Tribute Dashboard |
+   | `TRIBUTE_DIGITAL_PRODUCTS` | Список цифровых товаров `{name, tier, hours, url, referral_reward_hours}` |
 
 4. В разделе **API Keys** укажите URL вебхука:
    ```
@@ -249,38 +249,38 @@ vless://{uuid}@{host}:{port}?type=xhttp&security=tls&path={path}&host={host}&sni
 
 ## Реферальная программа
 
-Каждый пользователь получает уникальную реферальную ссылку вида `https://t.me/<bot>?start=<code>`. Когда новый пользователь регистрируется по этой ссылке и впоследствии оплачивает подписку через Tribute, реферер автоматически получает бонусные дни к своей подписке.
+Каждый пользователь получает уникальную реферальную ссылку вида `https://t.me/<bot>?start=<code>`. Когда новый пользователь регистрируется по этой ссылке и впоследствии оплачивает подписку через Tribute, реферер автоматически получает бонусные часы к своей подписке.
 
 **Как настроить награду:**
 
-Добавьте поле `referral_reward_days` к каждому плану Tribute, за который хотите начислять бонус. Рекомендуемое значение — **5 дней за каждый купленный месяц** (т.е. для плана на 1 месяц — 5, на 3 месяца — 15 и т.д.):
+Добавьте поле `referral_reward_hours` к каждому плану Tribute, за который хотите начислять бонус. Рекомендуемое значение — **120 часов (5 дней) за каждый купленный месяц** (т.е. для плана на 1 месяц — 120, на 3 месяца — 360 и т.д.):
 
 ```yaml
 TRIBUTE_SUBSCRIPTIONS:
   - name: "Standard 1 Month"
     tier: "standard"
     url: "https://tribute.tg/..."
-    referral_reward_days: 5    # 1 месяц → 5 дней рефереру
+    referral_reward_hours: 120    # 1 месяц → 120 часов (5 дней) рефереру
   - name: "Standard 3 Months"
     tier: "standard"
     url: "https://tribute.tg/..."
-    referral_reward_days: 15   # 3 месяца → 15 дней рефереру
+    referral_reward_hours: 360    # 3 месяца → 360 часов (15 дней) рефереру
   - name: "Premium 1 Month"
     tier: "premium"
     url: "https://tribute.tg/..."
-    referral_reward_days: 5    # 1 месяц premium → 5 дней рефереру на premium
+    referral_reward_hours: 120    # 1 месяц premium → 120 часов рефереру на premium
 
 TRIBUTE_DIGITAL_PRODUCTS:
   - name: "VPN 1 Month"
     tier: "standard"
     hours: 720
     url: "https://tribute.tg/..."
-    referral_reward_days: 5
+    referral_reward_hours: 120
 ```
 
-- `referral_reward_days: 0` (по умолчанию) — вознаграждение не начисляется.
+- `referral_reward_hours: 0` (по умолчанию) — вознаграждение не начисляется.
 - Начисление происходит при каждой успешной оплате реферала (включая продления).
-- **Тариф бонуса соответствует тарифу оплаченного плана**: купил реферал `standard` — реферер получает дни на `standard`, купил `premium` — на `premium`.
+- **Тариф бонуса соответствует тарифу оплаченного плана**: купил реферал `standard` — реферер получает часы на `standard`, купил `premium` — на `premium`.
 - Пользователь видит свою ссылку и статистику через кнопку **«👥 Рефералы»** в главном меню.
 
 > Реферальная программа работает **только с Tribute**. Оплаты через Telegram Payments не учитываются.
