@@ -22,8 +22,8 @@ from database import (
 )
 from functions import delete_client_by_email
 from handlers import ThrottlingMiddleware, setup_handlers
-from messages import PREM_EXPIRY_WARNING, SUB_EXPIRED, SUB_EXPIRY_WARNING
-from models import SlotName, SubscriptionTier, UserProfiles
+from messages import SUB_EXPIRED, SUB_EXPIRY_WARNING
+from models import SlotName, UserProfiles
 from tribute_webhook import create_tribute_app
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -51,26 +51,15 @@ async def check_subscriptions(bot: Bot):
         await asyncio.sleep(3600)
 
 
-async def _send_expiry_notifications(bot, user, now: datetime, std_active: bool, prem_active: bool):
-    """Send 24h expiry warning notifications."""
-    if std_active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
+async def _send_expiry_notifications(bot, user, now: datetime, active: bool):
+    """Send 24h expiry warning notification."""
+    if active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
         try:
             await bot.send_message(user.telegram_id, SUB_EXPIRY_WARNING)
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
                     db_user.notified = True
-                    session.commit()
-        except Exception as e:
-            logger.warning(f"⚠️ Notification error: {e}")
-
-    if prem_active and (user.premium_end - now < timedelta(days=1)) and not user.premium_notified:
-        try:
-            await bot.send_message(user.telegram_id, PREM_EXPIRY_WARNING)
-            with Session() as session:
-                db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
-                if db_user:
-                    db_user.premium_notified = True
                     session.commit()
         except Exception as e:
             logger.warning(f"⚠️ Notification error: {e}")
@@ -96,21 +85,20 @@ async def _delete_profile_slot(profiles: UserProfiles, slot: SlotName) -> UserPr
 
 
 async def _check_user_subscription(bot, user, now: datetime):
-    std_active = bool(user.subscription_end and user.subscription_end > now)
-    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
+    active = bool(user.subscription_end and user.subscription_end > now)
 
-    await _send_expiry_notifications(bot, user, now, std_active, prem_active)
+    await _send_expiry_notifications(bot, user, now, active)
 
     profiles = user.profiles
     if not profiles:
         return
     changed = False
 
-    if not std_active and profiles.standard is not None:
+    if not active and profiles.standard is not None:
         profiles = await _delete_profile_slot(profiles, SlotName.STANDARD)
         changed = True
 
-    if not prem_active and profiles.wl is not None:
+    if not active and profiles.wl is not None:
         profiles = await _delete_profile_slot(profiles, SlotName.WL)
         changed = True
 
@@ -118,11 +106,10 @@ async def _check_user_subscription(bot, user, now: datetime):
         with Session() as session:
             db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
             if db_user:
-                db_user.subscription_tier = SubscriptionTier.PREMIUM if prem_active else SubscriptionTier.STANDARD
                 db_user.profiles = profiles if profiles else UserProfiles()
                 session.commit()
 
-        if not std_active and not prem_active:
+        if not active:
             try:
                 await bot.send_message(user.telegram_id, SUB_EXPIRED)
             except Exception as e:
@@ -169,7 +156,6 @@ async def update_admins_status():
                     subscription_end=validate_and_fix_subscription_date(
                         datetime.utcnow() + timedelta(days=config.TRIAL_DAYS)
                     ),
-                    subscription_tier=SubscriptionTier(config.TRIAL_TIER),
                     referral_code=secrets.token_urlsafe(8),
                 )
                 session.add(new_admin)
@@ -248,7 +234,7 @@ async def main():
         logger.info(f"ℹ️  Tribute webhook listening on port {config.TRIBUTE_WEBHOOK_PORT}")
         if config.TRIBUTE_DIGITAL_PRODUCTS:
             for p in config.TRIBUTE_DIGITAL_PRODUCTS:
-                logger.info(f"ℹ️  Tribute digital product: '{p.name}' → {p.tier}, {p.hours}h")
+                logger.info(f"ℹ️  Tribute digital product: '{p.name}' → {p.hours}h")
         else:
             logger.info("ℹ️  No Tribute digital products configured")
     else:

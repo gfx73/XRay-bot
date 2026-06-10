@@ -11,17 +11,14 @@ from sqlalchemy import (
     String,
     create_engine,
     func,
-    or_,
-)
-from sqlalchemy import (
-    Enum as SaEnum,
+    text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
 from config import config
 from functions import delete_client_by_email
-from models import SubscriptionTier, UserProfiles
+from models import UserProfiles
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +53,8 @@ class User(Base):
     username = Column(String)
     registration_date = Column(DateTime, default=datetime.utcnow)
     subscription_end = Column(DateTime)
-    premium_end = Column(DateTime, nullable=True)          # отдельный срок для premium/wl
     is_admin = Column(Boolean, default=False)
     notified = Column(Boolean, default=False)
-    premium_notified = Column(Boolean, default=False)
-    subscription_tier = Column(SaEnum(SubscriptionTier), default=SubscriptionTier.STANDARD)
     profiles = Column(PydanticJSON(UserProfiles), nullable=True)
     referral_code = Column(String, unique=True, nullable=True)
     referred_by = Column(Integer, nullable=True)
@@ -117,7 +111,6 @@ async def create_user(
             username=username,
             subscription_end=subscription_end,
             is_admin=is_admin,
-            subscription_tier=SubscriptionTier(config.TRIAL_TIER),
             referral_code=secrets.token_urlsafe(8),
             referred_by=referred_by,
         )
@@ -133,15 +126,12 @@ async def delete_user_profile(telegram_id: int):
         if user:
             user.profiles = UserProfiles()
             user.notified = False
-            user.premium_notified = False
             session.commit()
             logger.info(f"✅ User profile deleted: {telegram_id}")
 
-async def update_subscription(telegram_id: int, months: int = 0, tier: str | None = None, hours: int = 0):
-    """Обновляет подписку с учётом текущего состояния.
+async def update_subscription(telegram_id: int, months: int = 0, hours: int = 0):
+    """Обновляет подписку пользователя.
 
-    tier="basic"   → продлевает subscription_end, premium_end не трогает.
-    tier="premium" → продлевает premium_end, subscription_end не трогает.
     hours имеет приоритет над months; если оба 0 — ничего не добавляется.
     """
     with Session() as session:
@@ -149,39 +139,17 @@ async def update_subscription(telegram_id: int, months: int = 0, tier: str | Non
         if user:
             now = datetime.utcnow()
             duration = timedelta(hours=hours) if hours else timedelta(days=months * 30)
-            if tier == SubscriptionTier.PREMIUM:
-                # subscription_end считается от текущего subscription_end (если активен)
-                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-                if user.subscription_end > now:
-                    user.subscription_end += duration
-                else:
-                    user.subscription_end = now + duration
-                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-                # premium_end считается независимо — от текущего premium_end (если активен), иначе от now
-                current_prem = validate_and_fix_subscription_date(user.premium_end) if user.premium_end else now
-                if current_prem > now:
-                    user.premium_end = current_prem + duration
-                else:
-                    user.premium_end = now + duration
-                user.premium_end = validate_and_fix_subscription_date(user.premium_end)
-                user.notified = False
-                user.premium_notified = False
+            user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+            if user.subscription_end and user.subscription_end > now:
+                user.subscription_end += duration
             else:
-                # Продлеваем только standard; premium_end не трогаем
-                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-                if user.subscription_end > now:
-                    user.subscription_end += duration
-                else:
-                    user.subscription_end = now + duration
-                user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
-                user.notified = False
-            # Derive tier from currently active subscriptions
-            has_active_premium = bool(user.premium_end and user.premium_end > now)
-            user.subscription_tier = SubscriptionTier.PREMIUM if has_active_premium else SubscriptionTier.STANDARD
+                user.subscription_end = now + duration
+            user.subscription_end = validate_and_fix_subscription_date(user.subscription_end)
+            user.notified = False
             session.commit()
             duration_str = f"{hours}h" if hours else f"{months}mo"
-            logger.info(f"✅ Subscription updated for {telegram_id}: +{duration_str}, tier={tier}, "
-                        f"subscription_end={user.subscription_end}, premium_end={user.premium_end}")
+            logger.info(f"✅ Subscription updated for {telegram_id}: +{duration_str}, "
+                        f"subscription_end={user.subscription_end}")
             return True
         return False
 
@@ -191,14 +159,9 @@ async def get_all_users(with_subscription: bool | None = None):
         if with_subscription is not None:
             now = datetime.utcnow()
             if with_subscription:
-                query = query.filter(
-                    or_(User.subscription_end > now, User.premium_end > now)
-                )
+                query = query.filter(User.subscription_end > now)
             else:
-                query = query.filter(
-                    User.subscription_end <= now,
-                    or_(User.premium_end.is_(None), User.premium_end <= now),
-                )
+                query = query.filter(User.subscription_end <= now)
         return query.all()
 
 async def create_static_profile(name: str, vless_url: str):
@@ -218,7 +181,7 @@ async def get_user_stats():
         now = datetime.utcnow()
         total = session.query(func.count(User.id)).scalar()
         with_sub = session.query(func.count(User.id)).filter(
-            or_(User.subscription_end > now, User.premium_end > now)
+            User.subscription_end > now
         ).scalar()
         without_sub = total - with_sub
         return total, with_sub, without_sub

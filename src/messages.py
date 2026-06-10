@@ -10,32 +10,30 @@ def _esc(s: str) -> str:
 HELP_TEXT = (
     "🐍 <b>О боте:</b>\n"
     "Используем самые современные технологии обхода блокировок — быстро, надёжно и без лишних сложностей.\n\n"
-    "✅ <b>Без ограничений по трафику</b> для стандартных тарифов\n"
+    "✅ <b>Без ограничений по трафику</b> для стандартного профиля\n"
     "📖 <b>Авторские мануалы</b> по настройке в закрытом Telegram-канале <i>(доступ при покупке через Tribute)</i>\n"
     "🛠 <b>Поддержка</b> при возникновении любых проблем\n"
     "💯 Своим продуктом я пользуюсь лично\n\n"
     "━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📦 <b>Тарифы:</b>\n\n"
-    "🔹 <b>Стандартный</b> — подходит для повседневного использования:\n"
-    "• До 5 устройств одновременно\n"
+    "📦 <b>Что входит в подписку:</b>\n\n"
+    "🔒 <b>Стандартный профиль</b> — для повседневного использования:\n"
     "• Без ограничений по трафику\n"
     "• Стабильный обход большинства блокировок\n\n"
-    "💎 <b>Premium</b> — для обхода белых списков <i>(когда на улице не работает ничего, кроме ВК и Яндекса)</i>:\n"
-    "• Специальная конфигурация для мобильных сетей\n"
-    "• Лимит трафика: <b>50 ГБ в месяц</b>\n\n"
-    "💡 <b>Стандартный тариф подходит в 9 из 10 случаев.</b> Premium нужен только тогда, когда интернет ограничен на уровне оператора связи."
+    "🛡 <b>WL-профиль (Whitelist)</b> — для мобильных сетей с белыми списками:\n"
+    "• Специальная конфигурация для ситуаций, когда в транспорте или на улице\n"
+    "  не работает ничего, кроме ВК, Яндекса и Госуслуг\n"
+    "• Отдельный лимит трафика\n\n"
+    "💡 <b>Оба профиля включены в одну подписку.</b>"
 )
 
 CONNECT_INSTRUCTIONS = (
     "🌐 *Подключение VPN*\n\n"
     "━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📌 *Какой тариф выбрать?*\n\n"
-    "🔹 *Стандартный* — ваш выбор по умолчанию:\n"
-    "Отлично работает дома, в офисе и при хорошем мобильном интернете.\n"
-    "Без ограничений по трафику, до 5 устройств.\n\n"
-    "💎 *Premium* — только при включении белых списков:\n"
-    "Когда на улице или в транспорте не работает ничего, кроме ВК, Яндекса и Госуслуг — вот тогда переключайтесь на Premium.\n"
-    "Лимит трафика: 50 ГБ в месяц.\n\n"
+    "📌 *Какой профиль выбрать?*\n\n"
+    "🔒 *Стандартный* — ваш выбор по умолчанию:\n"
+    "Отлично работает дома, в офисе и при хорошем мобильном интернете.\n\n"
+    "🛡 *WL (Whitelist)* — когда включены белые списки:\n"
+    "Когда на улице или в транспорте не работает ничего, кроме ВК, Яндекса и Госуслуг.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━\n\n"
     "📲 *Как подключиться:*\n\n"
     "*1.* Нажмите кнопку «Подключиться» или отсканируйте QR-код\n"
@@ -51,11 +49,6 @@ CONNECT_INSTRUCTIONS = (
 
 SUB_EXPIRY_WARNING = (
     "⏰ *Подписка истекает через 24 часа!*\n\n"
-    "Продлите её, чтобы не потерять доступ к VPN."
-)
-
-PREM_EXPIRY_WARNING = (
-    "⏰ *Premium-подписка истекает через 24 часа!*\n\n"
     "Продлите её, чтобы не потерять доступ к VPN."
 )
 
@@ -76,16 +69,15 @@ def welcome(bot_name: str) -> str:
     return (
         f"👋 Добро пожаловать в `{bot_name}`!\n\n"
         "🎁 Вам активирован *бесплатный тестовый период на 3 дня* — пользуйтесь!\n\n"
-        "📖 Узнайте о тарифах в разделе *ℹ️ Помощь*.\n\n"
-        "💡 Коротко: *Стандартный* тариф подходит для повседневного использования. "
-        "*Premium* нужен, когда оператор включает белые списки и не работает ничего, кроме ВК и Яндекса."
+        "📖 Узнайте о возможностях в разделе *ℹ️ Помощь*.\n\n"
+        "💡 В подписку входят два профиля: *Стандартный* для повседневного использования "
+        "и *WL* для мобильных сетей с белыми списками."
     )
 
 
-def payment_success(action_type: str, months: int, suffix: str, tier_label: str) -> str:
+def payment_success(action_type: str, months: int, suffix: str) -> str:
     return (
         f"✅ *Оплата прошла успешно!*\n\n"
-        f"📦 Тариф: *{tier_label}*\n"
         f"🗓 Подписка {action_type} на *{months} {suffix}*\n\n"
         "Спасибо за покупку! 🎉"
     )
@@ -93,12 +85,12 @@ def payment_success(action_type: str, months: int, suffix: str, tier_label: str)
 
 def admin_payment_notification(
     action_type: str, full_name: str, telegram_id: int,
-    months: int, suffix: str, tier_label: str, final_price: int,
+    months: int, suffix: str, final_price: int,
 ) -> str:
     return (
         f"💰 {action_type.capitalize()} подписка — "
         f"`{_esc(full_name)}` | `{telegram_id}` "
-        f"на {months} {suffix} ({tier_label}) — *{final_price}₽*"
+        f"на {months} {suffix} — *{final_price}₽*"
     )
 
 
@@ -208,33 +200,33 @@ def delete_user_failure(telegram_id: int) -> str:
     )
 
 
-def tribute_sub_activated(action: str, tier_label: str, months: int, suffix: str) -> str:
+def tribute_sub_activated(action: str, months: int, suffix: str) -> str:
     return (
         f"✅ *Подписка {action} через Tribute!*\n\n"
-        f"📦 Тариф: *{tier_label}* | 🗓 Срок: {months} {suffix}\n\n"
+        f"🗓 Срок: {months} {suffix}\n\n"
         "Используйте /connect для получения конфигурации."
     )
 
 
-def tribute_admin_notify(action: str, telegram_id: int, months: int, suffix: str, tier_label: str) -> str:
+def tribute_admin_notify(action: str, telegram_id: int, months: int, suffix: str) -> str:
     return (
         f"🔔 Tribute: подписка {action} — `{telegram_id}` "
-        f"на {months} {suffix} ({tier_label})"
+        f"на {months} {suffix}"
     )
 
 
-def tribute_digital_activated(product_name: str, tier_label: str, hours: int) -> str:
+def tribute_digital_activated(product_name: str, hours: int) -> str:
     return (
         f"✅ *Подписка активирована через Tribute!*\n\n"
-        f"🛒 Товар: {product_name} | 📦 Тариф: {tier_label} | ⏱ Срок: {hours}ч\n\n"
+        f"🛒 Товар: {product_name} | ⏱ Срок: {hours}ч\n\n"
         "Используйте /connect для получения конфигурации."
     )
 
 
-def tribute_digital_admin_notify(telegram_id: int, product_name: str, tier_label: str, hours: int) -> str:
+def tribute_digital_admin_notify(telegram_id: int, product_name: str, hours: int) -> str:
     return (
         f"🔔 Tribute: цифровой товар — `{telegram_id}` "
-        f"«{product_name}» ({tier_label}, {hours}ч)"
+        f"«{product_name}» ({hours}ч)"
     )
 
 
@@ -271,16 +263,14 @@ def referral_info_text(link: str, count: int) -> str:
         "👥 *Реферальная программа*\n\n"
         "Приглашайте друзей и получайте бонусные дни подписки за каждую их оплату!\n\n"
         "📌 *Условия:*\n"
-        "• За каждый купленный месяц реферала — *5 дней* к вашей подписке\n"
-        "• Тип начисляемой подписки совпадает с тарифом реферала\n"
-        "  (купил Basic — получите дни на Basic, купил Premium — на Premium)\n\n"
+        "• За каждый купленный месяц реферала — *5 дней* к вашей подписке\n\n"
         f"🔗 *Ваша реферальная ссылка:*\n`{link}`\n\n"
         f"📊 *Приглашено пользователей:* `{count}`\n\n"
         "💡 Поделитесь ссылкой — бонус начисляется автоматически при каждой оплате друга."
     )
 
 
-def referral_reward_received(hours: int, tier_label: str) -> str:
+def referral_reward_received(hours: int) -> str:
     if hours == 1:
         suffix = "час"
     elif hours in (2, 3, 4):
@@ -289,6 +279,5 @@ def referral_reward_received(hours: int, tier_label: str) -> str:
         suffix = "часов"
     return (
         f"🎁 *Ваш реферал оплатил подписку!*\n\n"
-        f"📦 Тариф: {tier_label}\n"
         f"⏱ Вам начислено: *{hours} {suffix}* подписки"
     )

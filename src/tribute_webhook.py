@@ -11,7 +11,7 @@ from config import DigitalProduct, TributeSub, config
 from database import Session, User, create_user, get_user, update_subscription
 from functions import (
     get_safe_expiry_timestamp,
-    sync_profiles_for_tier,
+    sync_profiles,
 )
 from messages import (
     TRIBUTE_CANCELLED,
@@ -21,7 +21,6 @@ from messages import (
     tribute_digital_admin_notify,
     tribute_sub_activated,
 )
-from models import SubscriptionTier
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +31,16 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 }
 
 
-async def _sync_profiles(telegram_id: int, tier: SubscriptionTier) -> None:
+async def _sync_profiles_after_payment(telegram_id: int) -> None:
     """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки."""
     updated_user = await get_user(telegram_id)
     if not updated_user:
         return
 
-    std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
-    prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
+    expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
     existing = updated_user.profiles
 
-    profiles_to_save = await sync_profiles_for_tier(telegram_id, tier, std_expiry, prem_expiry, existing)
+    profiles_to_save = await sync_profiles(telegram_id, expiry, existing)
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
@@ -65,23 +63,22 @@ def _find_digital_product(name: str) -> DigitalProduct | None:
     return None
 
 
-async def _reward_referrer(buyer_id: int, reward_hours: int, tier: SubscriptionTier, bot: Bot) -> None:
+async def _reward_referrer(buyer_id: int, reward_hours: int, bot: Bot) -> None:
     if reward_hours <= 0:
         return
     buyer = await get_user(buyer_id)
     if not buyer or not buyer.referred_by:
         return
     referrer_id = buyer.referred_by
-    success = await update_subscription(referrer_id, hours=reward_hours, tier=tier)
+    success = await update_subscription(referrer_id, hours=reward_hours)
     if not success:
         logger.warning(f"⚠️ Referral reward: update_subscription failed for referrer {referrer_id}")
         return
-    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
-    logger.info(f"✅ Referral reward: {reward_hours}h {tier} → referrer {referrer_id} (buyer {buyer_id})")
+    logger.info(f"✅ Referral reward: {reward_hours}h → referrer {referrer_id} (buyer {buyer_id})")
     with contextlib.suppress(Exception):
         await bot.send_message(
             referrer_id,
-            referral_reward_received(reward_hours, tier_label),
+            referral_reward_received(reward_hours),
             parse_mode="Markdown",
         )
 
@@ -114,72 +111,66 @@ async def _handle_subscription_event(
 ) -> None:
     """Handle new_subscription and renewed_subscription events."""
     sub = _find_subscription(payload.get("subscription_name", ""))
-    tier = sub.tier if sub else SubscriptionTier.STANDARD
     months = PERIOD_TO_MONTHS.get(payload.get("period", "monthly"), 1)
-    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
     suffix = _months_suffix(months)
 
     await _ensure_user(telegram_id, payload)
 
-    success = await update_subscription(telegram_id, months=months, tier=tier)
+    success = await update_subscription(telegram_id, months=months)
     if not success:
         logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id}")
         return
 
     try:
-        await _sync_profiles(telegram_id, tier)
+        await _sync_profiles_after_payment(telegram_id)
     except Exception as e:
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 
     action = "продлена" if event_name == "renewed_subscription" else "активирована"
     with contextlib.suppress(Exception):
-        await bot.send_message(telegram_id, tribute_sub_activated(action, tier_label, months, suffix))
+        await bot.send_message(telegram_id, tribute_sub_activated(action, months, suffix))
 
     for admin_id in config.ADMINS:
         with contextlib.suppress(Exception):
             await bot.send_message(
                 admin_id,
-                tribute_admin_notify(action, telegram_id, months, suffix, tier_label),
+                tribute_admin_notify(action, telegram_id, months, suffix),
                 parse_mode="Markdown",
             )
 
-    await _reward_referrer(telegram_id, sub.referral_reward_hours if sub else 0, tier, bot)
-    logger.info(f"✅ Tribute '{event_name}': user {telegram_id}, tier={tier}, months={months}")
+    await _reward_referrer(telegram_id, sub.referral_reward_hours if sub else 0, bot)
+    logger.info(f"✅ Tribute '{event_name}': user {telegram_id}, months={months}")
 
 
 async def _handle_digital_product_event(
     product: DigitalProduct, payload: dict, telegram_id: int, bot: Bot
 ) -> None:
     """Handle new_digital_product events for a matched product."""
-    tier = product.tier
-    tier_label = "⭐ Premium" if tier == SubscriptionTier.PREMIUM else "📦 Standard"
-
     await _ensure_user(telegram_id, payload)
 
-    success = await update_subscription(telegram_id, hours=product.hours, tier=tier)
+    success = await update_subscription(telegram_id, hours=product.hours)
     if not success:
         logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id} (product='{product.name}')")
         return
 
     try:
-        await _sync_profiles(telegram_id, tier)
+        await _sync_profiles_after_payment(telegram_id)
     except Exception as e:
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 
     with contextlib.suppress(Exception):
-        await bot.send_message(telegram_id, tribute_digital_activated(product.name, tier_label, product.hours))
+        await bot.send_message(telegram_id, tribute_digital_activated(product.name, product.hours))
 
     for admin_id in config.ADMINS:
         with contextlib.suppress(Exception):
             await bot.send_message(
                 admin_id,
-                tribute_digital_admin_notify(telegram_id, product.name, tier_label, product.hours),
+                tribute_digital_admin_notify(telegram_id, product.name, product.hours),
                 parse_mode="Markdown",
             )
 
-    await _reward_referrer(telegram_id, product.referral_reward_hours, product.tier, bot)
-    logger.info(f"✅ Tribute 'new_digital_product': user {telegram_id}, product='{product.name}', "
-                f"tier={tier}, hours={product.hours}")
+    await _reward_referrer(telegram_id, product.referral_reward_hours, bot)
+    logger.info(f"✅ Tribute 'new_digital_product': user {telegram_id}, product='{product.name}', hours={product.hours}")
 
 
 def create_tribute_app(bot: Bot) -> FastAPI:
@@ -213,7 +204,6 @@ def create_tribute_app(bot: Bot) -> FastAPI:
         if event_name in ("new_subscription", "renewed_subscription"):
             await _handle_subscription_event(event_name, payload, telegram_id, bot)
         elif event_name == "cancelled_subscription":
-            # Подписка действует до expires_at — check_subscriptions удалит профили при истечении
             logger.info(f"ℹ️ Tribute 'cancelled_subscription': user {telegram_id} — will expire naturally")
             with contextlib.suppress(Exception):
                 await bot.send_message(telegram_id, TRIBUTE_CANCELLED)

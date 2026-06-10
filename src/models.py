@@ -5,11 +5,6 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 
-class SubscriptionTier(StrEnum):
-    STANDARD = "standard"
-    PREMIUM = "premium"
-
-
 class SlotName(StrEnum):
     STANDARD = "standard"
     WL = "wl"

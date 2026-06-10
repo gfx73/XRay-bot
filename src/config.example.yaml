@@ -13,26 +13,24 @@ SUBSCRIPTION_URL_BASE: "ip-or-domain"
 SUB_BASE_PATH: "/sub"
 
 # ──────────────────────────────────────────────────────────────
-# Система тарифов: ID инбаундов через запятую (из панели 3x-ui)
+# Профили: ID инбаундов через запятую (из панели 3x-ui)
 # Протокол определяется автоматически из панели
 # ──────────────────────────────────────────────────────────────
-# standard-клиент (безлимит) — для всех тарифов
+# Стандартный профиль (безлимит) — основной
 STANDARD_INBOUNDS: "1"
-# wl-клиент (с лимитом) — только для premium, поверх standard
-# Оставьте пустым если premium-тир не нужен
-PREMIUM_INBOUNDS: "3"
-# Лимит трафика для wl-клиента в ГБ (0 = безлимит)
-PREMIUM_TRAFFIC_LIMIT_GB: 100
-# Лимит трафика для standard-клиента в ГБ (0 = безлимит)
+# WL-профиль (whitelist) — для мобильных сетей с белыми списками
+# Оставьте пустым если WL-профиль не нужен
+WL_INBOUNDS: "3"
+# Лимит трафика для WL-профиля в ГБ (0 = безлимит)
+WL_TRAFFIC_LIMIT_GB: 50
+# Лимит трафика для стандартного профиля в ГБ (0 = безлимит)
 STANDARD_TRAFFIC_LIMIT_GB: 0
-# Лимит одновременных IP для standard-клиента (0 = безлимит)
+# Лимит одновременных IP для стандартного профиля (0 = безлимит)
 STANDARD_IP_LIMIT: 0
-# Лимит одновременных IP для premium/wl-клиента (0 = безлимит)
-PREMIUM_IP_LIMIT: 0
+# Лимит одновременных IP для WL-профиля (0 = безлимит)
+WL_IP_LIMIT: 0
 
-PREMIUM_PRICE_MULTIPLIER: 1.5
 TRIAL_DAYS: 3
-TRIAL_TIER: "standard"
 
 # ──────────────────────────────────────────────────────────────
 # Tribute (опционально — второй способ оплаты через tribute.tg)
@@ -44,41 +42,36 @@ TRIAL_TIER: "standard"
 TRIBUTE_API_KEY: ""
 TRIBUTE_WEBHOOK_PORT: 8081
 
-# Подписки Tribute: список объектов {name, tier, url, referral_reward_hours}
+# Подписки Tribute: список объектов {name, url, referral_reward_hours}
 # name: точное название плана в Tribute Dashboard
-# tier: standard | premium
 # url: ссылка «Поделиться» из Tribute Dashboard
 # referral_reward_hours: сколько часов начислять рефереру при каждой оплате (0 = без награды)
 # Если список пуст — кнопки подписок Tribute не появляются в боте
 TRIBUTE_SUBSCRIPTIONS: []
 #TRIBUTE_SUBSCRIPTIONS:
-#  - name: "Standart"
-#    tier: "standard"
+#  - name: "VPN 1 Month"
 #    url: "https://tribute.tg/..."
-#    referral_reward_hours: 7
-#  - name: "Premium"
-#    tier: "premium"
+#    referral_reward_hours: 120
+#  - name: "VPN 3 Months"
 #    url: "https://tribute.tg/..."
-#    referral_reward_hours: 10
+#    referral_reward_hours: 360
 
-# Цифровые товары: список объектов {name, tier, hours, price, url, referral_reward_hours}
-# tier: standard | premium  |  hours: срок подписки в часах
+# Цифровые товары: список объектов {name, hours, price, url, referral_reward_hours}
+# hours: срок подписки в часах
 # price: цена в рублях (отображается в кнопке выбора периода; 0 = цена не показывается)
 # url опционален — если задан, кнопка товара появится в меню «Продлить»
 # referral_reward_hours: сколько часов начислять рефереру при покупке товара (0 = без награды)
-# Имена должны быть уникальны в рамках одного тира (standard/premium)
+# Имена должны быть уникальны
 TRIBUTE_DIGITAL_PRODUCTS: []
 #TRIBUTE_DIGITAL_PRODUCTS:
-#  - name: "VPN Standard 1 Month"   # точное название товара в Tribute (уникально)
-#    button_title: "1 месяц"        # текст кнопки в боте (опционально, иначе берётся name)
-#    tier: "standard"
+#  - name: "VPN 1 Month"         # точное название товара в Tribute (уникально)
+#    button_title: "1 месяц"     # текст кнопки в боте (опционально, иначе берётся name)
 #    hours: 720
 #    price: 199
 #    url: "https://tribute.tg/..."
 #    referral_reward_hours: 120
-#  - name: "VPN Standard 3 Months"
+#  - name: "VPN 3 Months"
 #    button_title: "3 месяца (-11%)"
-#    tier: "standard"
 #    hours: 2160
 #    price: 530
 #    url: "https://tribute.tg/..."

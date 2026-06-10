@@ -55,7 +55,7 @@ from functions import (
     get_online_users,
     get_safe_expiry_timestamp,
     get_user_stats,
-    sync_profiles_for_tier,
+    sync_profiles,
     update_client_expiry,
 )
 from messages import (
@@ -79,7 +79,7 @@ from messages import (
     support_user_received,
     welcome,
 )
-from models import SlotName, SubscriptionTier, UserProfiles
+from models import SlotName, UserProfiles
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +127,6 @@ class ThrottlingMiddleware:
 router = Router()
 
 MAX_MESSAGE_LENGTH = 4096
-
-TIER_LABELS = {
-    SubscriptionTier.STANDARD: "📦 Standard",
-    SubscriptionTier.PREMIUM: "⭐ Premium",
-}
-
 
 class AdminStates(StatesGroup):
     ADD_TIME = State()
@@ -195,23 +189,17 @@ def _has_profiles(user) -> bool:
 
 def _is_subscription_active(user) -> bool:
     now = datetime.utcnow()
-    return (
-        bool(user.subscription_end and user.subscription_end > now)
-        or bool(getattr(user, 'premium_end', None) and user.premium_end > now)
-    )
+    return bool(user.subscription_end and user.subscription_end > now)
 
 
-async def _create_client_for_tier(
-    telegram_id: int, subscription_end, tier: SubscriptionTier, premium_end=None
-) -> UserProfiles:
-    """Создаёт VPN-клиентов: standard c expiry из subscription_end, wl — из premium_end."""
-    std_expiry = get_safe_expiry_timestamp(subscription_end)
-    prem_expiry = get_safe_expiry_timestamp(premium_end)
+async def _create_client(telegram_id: int, subscription_end) -> UserProfiles:
+    """Создаёт оба VPN-профиля (standard и wl) для пользователя."""
+    expiry = get_safe_expiry_timestamp(subscription_end)
     result = UserProfiles()
 
-    if std_expiry > 0:
+    if expiry > 0:
         standard_profile = await create_client(
-            telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD),
+            telegram_id, expiry, config.get_standard_inbounds(),
             traffic_limit_gb=config.STANDARD_TRAFFIC_LIMIT_GB,
             ip_limit=config.STANDARD_IP_LIMIT,
         )
@@ -220,17 +208,17 @@ async def _create_client_for_tier(
         else:
             logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
 
-    if tier == SubscriptionTier.PREMIUM and config.has_premium_inbounds() and prem_expiry > 0:
-        wl_profile = await create_client(
-            telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
-            email_suffix=f"_{SlotName.WL.value}",
-            traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
-            ip_limit=config.PREMIUM_IP_LIMIT,
-        )
-        if wl_profile:
-            result.wl = wl_profile
-        else:
-            logger.error(f"🛑 Failed to create wl client for user {telegram_id}")
+        if config.has_wl_inbounds():
+            wl_profile = await create_client(
+                telegram_id, expiry, config.get_wl_inbounds(),
+                email_suffix=f"_{SlotName.WL.value}",
+                traffic_limit_gb=config.WL_TRAFFIC_LIMIT_GB,
+                ip_limit=config.WL_IP_LIMIT,
+            )
+            if wl_profile:
+                result.wl = wl_profile
+            else:
+                logger.error(f"🛑 Failed to create wl client for user {telegram_id}")
 
     return result
 
@@ -242,26 +230,19 @@ async def show_menu(bot: Bot, chat_id: int, message_id: int | None = None):
         return
 
     now = datetime.utcnow()
-    prem_active = bool(getattr(user, 'premium_end', None) and user.premium_end > now)
-    std_active = bool(user.subscription_end and user.subscription_end > now)
+    active = bool(user.subscription_end and user.subscription_end > now)
 
-    std_expiry = user.subscription_end.strftime("%d-%m-%Y %H:%M") if user.subscription_end else "—"
-    std_status = "Активна" if std_active else "Истекла"
-    std_line = f"*📦 Стандартный*: `{std_status}` (до `{std_expiry}`)"
+    expiry_str = user.subscription_end.strftime("%d-%m-%Y %H:%M") if user.subscription_end else "—"
+    status = "Активна" if active else "Истекла"
 
-    safe_name = user.full_name.replace("`", "‘")
+    safe_name = user.full_name.replace("`", "’")
     text = (
         f"*Имя профиля*: `{safe_name}`\n"
         f"*Id*: `{user.telegram_id}`\n"
-        f"{std_line}"
+        f"*Подписка*: `{status}` (до `{expiry_str}`)"
     )
 
-    if config.has_premium_inbounds():
-        prem_expiry = user.premium_end.strftime("%d-%m-%Y %H:%M") if getattr(user, 'premium_end', None) else "—"
-        prem_status = "Активна" if prem_active else "Истекла"
-        text += f"\n*⭐ Premium*: `{prem_status}` (до `{prem_expiry}`)"
-
-    any_active = std_active or prem_active
+    any_active = active
     builder = InlineKeyboardBuilder()
     builder.button(text="💵 Продлить" if any_active else "💵 Оплатить", callback_data="renew_sub")
     builder.button(text="✅ Подключить", callback_data="connect")
@@ -366,68 +347,40 @@ async def renew_cmd(message: Message, bot: Bot):
         await start_cmd(message, bot)
         return
     await message.answer(
-        "💵 *Выберите тариф и период подписки:*",
-        reply_markup=_build_renew_keyboard(),
+        "💵 *Выберите период подписки:*",
+        reply_markup=_build_period_keyboard(),
         parse_mode='Markdown'
     )
 
 
-def _build_tier_keyboard():
-    """Шаг 1: выбор тарифа."""
-    builder = InlineKeyboardBuilder()
-    has_premium = config.has_premium_inbounds()
-    has_tg = bool(config.PAYMENT_TOKEN)
-
-    standard_products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == SubscriptionTier.STANDARD and p.url]
-    premium_products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == SubscriptionTier.PREMIUM and p.url]
-    standard_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == SubscriptionTier.STANDARD and s.url]
-    premium_subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == SubscriptionTier.PREMIUM and s.url]
-
-    has_standard = has_tg or standard_products or standard_subs
-    has_premium_options = (has_tg or premium_products or premium_subs) and has_premium
-
-    if has_standard:
-        builder.button(text="📦 Standard", callback_data="tier_select_standard")
-    if has_premium_options:
-        builder.button(text="⭐ Premium", callback_data="tier_select_premium")
-
-    builder.button(text="⬅️ Назад", callback_data="back_to_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def _build_period_keyboard(tier: SubscriptionTier):
-    """Шаг 2: выбор периода для выбранного тарифа."""
+def _build_period_keyboard():
+    """Выбор периода подписки."""
     builder = InlineKeyboardBuilder()
     has_tg = bool(config.PAYMENT_TOKEN)
 
     if has_tg:
         for months in sorted(config.PRICES.keys()):
-            price = config.calculate_price(months, tier)
+            price = config.calculate_price(months)
             disc = config.PRICES[months]["discount_percent"]
             disc_text = f" (-{disc}%)" if disc else ""
             builder.button(
                 text=f"{months} мес. — {price} руб.{disc_text}",
-                callback_data=f"pay_{tier.value}_{months}",
+                callback_data=f"pay_{months}",
             )
     else:
-        products = [p for p in config.TRIBUTE_DIGITAL_PRODUCTS if p.tier == tier and p.url]
-        for product in products:
-            title = product.button_title or product.name
-            price_text = f" — {product.price} руб." if product.price > 0 else ""
-            builder.button(text=f"🛒 {title}{price_text} →", url=product.url)
+        for product in config.TRIBUTE_DIGITAL_PRODUCTS:
+            if product.url:
+                title = product.button_title or product.name
+                price_text = f" — {product.price} руб." if product.price > 0 else ""
+                builder.button(text=f"🛒 {title}{price_text} →", url=product.url)
 
-        subs = [s for s in config.TRIBUTE_SUBSCRIPTIONS if s.tier == tier and s.url]
-        for sub in subs:
-            builder.button(text=f"💳 Оплатить через Tribute →", url=sub.url)
+        for sub in config.TRIBUTE_SUBSCRIPTIONS:
+            if sub.url:
+                builder.button(text="💳 Оплатить через Tribute →", url=sub.url)
 
-    builder.button(text="⬅️ Назад", callback_data="back_to_tiers")
+    builder.button(text="⬅️ Назад", callback_data="back_to_menu")
     builder.adjust(1)
     return builder.as_markup()
-
-
-def _build_renew_keyboard():
-    return _build_tier_keyboard()
 
 
 @router.message(Command("connect"))
@@ -441,14 +394,9 @@ async def connect_cmd(message: Message, bot: Bot):
         await message.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
-    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
-
     if not _has_profiles(user):
         await message.answer("⚙️ Создаём ваш VPN профиль...")
-        new_profiles = await _create_client_for_tier(
-            user.telegram_id, user.subscription_end, tier,
-            premium_end=getattr(user, 'premium_end', None),
-        )
+        new_profiles = await _create_client(user.telegram_id, user.subscription_end)
         if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
@@ -488,7 +436,7 @@ async def stats_cmd(message: Message, bot: Bot):
     lines = ["📊 *Ваша статистика:*\n"]
     for slot, profile in profiles.slots().items():
         stats = await get_user_stats(profile.email)
-        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "💎 Premium"
+        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "🛡 WL (Whitelist)"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -541,34 +489,8 @@ async def referral_info_handler(callback: CallbackQuery, bot: Bot):
 async def renew_subscription(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "💵 *Выберите тариф:*",
-        reply_markup=_build_tier_keyboard(),
-        parse_mode='Markdown'
-    )
-
-
-@router.callback_query(F.data == "back_to_tiers")
-async def back_to_tiers(callback: CallbackQuery):
-    await callback.answer()
-    await callback.message.edit_text(
-        "💵 *Выберите тариф:*",
-        reply_markup=_build_tier_keyboard(),
-        parse_mode='Markdown'
-    )
-
-
-@router.callback_query(F.data.startswith("tier_select_"))
-async def tier_selected(callback: CallbackQuery):
-    await callback.answer()
-    tier_value = callback.data[len("tier_select_"):]
-    try:
-        tier = SubscriptionTier(tier_value)
-    except ValueError:
-        return
-    label = TIER_LABELS[tier]
-    await callback.message.edit_text(
-        f"{label}\n\n💵 *Выберите период:*",
-        reply_markup=_build_period_keyboard(tier),
+        "💵 *Выберите период подписки:*",
+        reply_markup=_build_period_keyboard(),
         parse_mode='Markdown'
     )
 
@@ -580,35 +502,29 @@ async def noop_handler(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment(callback: CallbackQuery, bot: Bot):
-    """Формат callback_data: pay_{tier}_{months}"""
+    """Формат callback_data: pay_{months}"""
     await callback.answer()
     try:
         parts = callback.data.split("_")
-        if len(parts) != 3:
+        if len(parts) != 2:
             await callback.message.answer("❌ Неверный формат кнопки оплаты")
             return
-        try:
-            tier = SubscriptionTier(parts[1])
-        except ValueError:
-            await callback.message.answer("❌ Неверный тариф")
-            return
-        months = int(parts[2])
+        months = int(parts[1])
 
         if months not in config.PRICES:
             await callback.message.answer("❌ Неверный период подписки")
             return
 
-        final_price = config.calculate_price(months, tier)
-        tier_label = TIER_LABELS.get(tier, tier.value)
+        final_price = config.calculate_price(months)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
 
-        prices = [LabeledPrice(label=f"VPN {tier_label} на {months} мес.", amount=final_price * 100)]
+        prices = [LabeledPrice(label=f"VPN на {months} мес.", amount=final_price * 100)]
         if config.PAYMENT_TOKEN:
             await bot.send_invoice(
                 chat_id=callback.from_user.id,
-                title=f"VPN {tier_label} на {months} {suffix}",
+                title=f"VPN на {months} {suffix}",
                 description=f"Доступ к VPN сервису на {months} {suffix}",
-                payload=f"subscription_{tier}_{months}",
+                payload=f"subscription_{months}",
                 provider_token=config.PAYMENT_TOKEN,
                 currency="RUB",
                 prices=prices,
@@ -628,30 +544,24 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery, bot: 
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 
-def _parse_payment_payload(payload: str) -> tuple[SubscriptionTier, int] | None:
+def _parse_payment_payload(payload: str) -> int | None:
     if not payload.startswith("subscription_"):
         return None
-    parts = payload[len("subscription_"):].split("_")
-    if len(parts) == 2:
-        try:
-            tier = SubscriptionTier(parts[0])
-            return tier, int(parts[1])
-        except (ValueError, KeyError):
-            pass
-    return None
+    try:
+        return int(payload[len("subscription_"):])
+    except (ValueError, TypeError):
+        return None
 
 
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message, bot: Bot):
     try:
-        parsed = _parse_payment_payload(message.successful_payment.invoice_payload)
-        if not parsed:
+        months = _parse_payment_payload(message.successful_payment.invoice_payload)
+        if not months:
             await message.answer("❌ Ошибка: неверный формат платежа")
             return
-        tier, months = parsed
 
-        final_price = config.calculate_price(months, tier)
-        tier_label = TIER_LABELS.get(tier, tier.value)
+        final_price = config.calculate_price(months)
 
         user = await get_user(message.from_user.id)
         if not user:
@@ -659,12 +569,9 @@ async def process_successful_payment(message: Message, bot: Bot):
             return
 
         now = datetime.utcnow()
-        if tier == SubscriptionTier.PREMIUM:
-            action_type = "продлена" if (getattr(user, 'premium_end', None) and user.premium_end > now) else "куплена"
-        else:
-            action_type = "продлена" if (user.subscription_end and user.subscription_end > now) else "куплена"
+        action_type = "продлена" if (user.subscription_end and user.subscription_end > now) else "куплена"
 
-        success = await update_subscription(message.from_user.id, months, tier=tier)
+        success = await update_subscription(message.from_user.id, months)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
 
         if not success:
@@ -672,13 +579,10 @@ async def process_successful_payment(message: Message, bot: Bot):
             return
 
         updated_user = await get_user(message.from_user.id)
-        std_expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
-        prem_expiry = get_safe_expiry_timestamp(getattr(updated_user, 'premium_end', None))
+        expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
         existing = _get_profiles(updated_user)
 
-        profiles_to_save = await sync_profiles_for_tier(
-            message.from_user.id, tier, std_expiry, prem_expiry, existing
-        )
+        profiles_to_save = await sync_profiles(message.from_user.id, expiry, existing)
 
         with Session() as session:
             db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
@@ -686,10 +590,10 @@ async def process_successful_payment(message: Message, bot: Bot):
                 db_user.profiles = profiles_to_save
                 session.commit()
 
-        await message.answer(payment_success(action_type, months, suffix, tier_label))
+        await message.answer(payment_success(action_type, months, suffix))
 
         admin_message = admin_payment_notification(
-            action_type, user.full_name, user.telegram_id, months, suffix, tier_label, final_price
+            action_type, user.full_name, user.telegram_id, months, suffix, final_price
         )
         for admin_id in config.ADMINS:
             try:
@@ -713,18 +617,13 @@ async def connect_profile(callback: CallbackQuery):
         await callback.answer("⚠️ Подписка истекла! Продлите подписку.")
         return
 
-    tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
-
     is_new: bool = False
     lock = _connect_locks.setdefault(user.telegram_id, asyncio.Lock())
     async with lock:
         user = await get_user(user.telegram_id)
         if not _has_profiles(user):
             await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
-            new_profiles = await _create_client_for_tier(
-                user.telegram_id, user.subscription_end, tier,
-                premium_end=getattr(user, 'premium_end', None),
-            )
+            new_profiles = await _create_client(user.telegram_id, user.subscription_end)
             if new_profiles:
                 with Session() as session:
                     db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
@@ -742,14 +641,12 @@ async def connect_profile(callback: CallbackQuery):
         await callback.message.answer("⚠️ У вас пока нет созданного профиля.")
         return
 
-    # Синхронизируем expiry в 3x-ui при каждом просмотре профиля — каждый слот по своей дате
     if not is_new:
-        std_expiry = get_safe_expiry_timestamp(user.subscription_end)
-        prem_expiry = get_safe_expiry_timestamp(getattr(user, 'premium_end', None))
-        if std_expiry > 0 and profiles.standard is not None:
-            await update_client_expiry(profiles.standard.email, std_expiry)
-        if prem_expiry > 0 and profiles.wl is not None:
-            await update_client_expiry(profiles.wl.email, prem_expiry)
+        expiry = get_safe_expiry_timestamp(user.subscription_end)
+        if expiry > 0 and profiles.standard is not None:
+            await update_client_expiry(profiles.standard.email, expiry)
+        if expiry > 0 and profiles.wl is not None:
+            await update_client_expiry(profiles.wl.email, expiry)
 
     await _send_profile_message(callback.message, user, profiles, edit=True, delete_after=True)
 
@@ -761,7 +658,7 @@ async def _send_profile_message(msg_or_callback, user, profiles: UserProfiles, e
     for slot, profile in profiles.slots().items():
         sub_url = generate_sub_url(profile.sub_id)
         full_sub_url = sub_url if sub_url.startswith(("http://", "https://")) else "https://" + sub_url
-        btn_text = "🔒 Подключиться (Стандартный)" if slot == SlotName.STANDARD else "💎 Подключиться (Premium)"
+        btn_text = "🔒 Подключиться (Стандартный)" if slot == SlotName.STANDARD else "🛡 Подключиться (WL)"
         builder.button(text=btn_text, url=full_sub_url)
 
     builder.button(text="⬅️ В меню", callback_data="back_to_menu")
@@ -810,7 +707,7 @@ async def user_stats(callback: CallbackQuery):
     lines = ["📊 *Ваша статистика:*\n"]
     for slot, profile in profiles.slots().items():
         stats = await get_user_stats(profile.email)
-        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "💎 Premium"
+        label = "🔒 Стандартный" if slot == SlotName.STANDARD else "🛡 WL (Whitelist)"
         lines.append(
             f"{label}:\n"
             f"  🔼 {_format_bytes(stats.get('upload', 0))}\n"
@@ -935,13 +832,19 @@ async def admin_add_time_amount(message: Message, state: FSMContext):
                 session.commit()
 
                 up = user.profiles
+                expiry_time = get_safe_expiry_timestamp(user.subscription_end)
                 if up.standard is not None:
-                    expiry_time = get_safe_expiry_timestamp(user.subscription_end)
                     try:
                         await update_client_expiry(up.standard.email, expiry_time)
                         logger.info(f"✅ Updated expiry for {up.standard.email} (admin add time)")
                     except Exception as e:
                         logger.error(f"🛑 Failed to update expiry for {up.standard.email}: {e}")
+                if up.wl is not None:
+                    try:
+                        await update_client_expiry(up.wl.email, expiry_time)
+                        logger.info(f"✅ Updated expiry for {up.wl.email} (admin add time)")
+                    except Exception as e:
+                        logger.error(f"🛑 Failed to update expiry for {up.wl.email}: {e}")
 
                 await message.answer(f"✅ Добавлено время пользователю {user_id}")
             else:
@@ -1010,13 +913,19 @@ async def admin_remove_time_amount(message: Message, state: FSMContext):
                 session.commit()
 
                 up = user.profiles
+                expiry_time = get_safe_expiry_timestamp(user.subscription_end)
                 if up.standard is not None:
-                    expiry_time = get_safe_expiry_timestamp(user.subscription_end)
                     try:
                         await update_client_expiry(up.standard.email, expiry_time)
                         logger.info(f"✅ Updated expiry for {up.standard.email} (admin remove time)")
                     except Exception as e:
                         logger.error(f"🛑 Failed to update expiry for {up.standard.email}: {e}")
+                if up.wl is not None:
+                    try:
+                        await update_client_expiry(up.wl.email, expiry_time)
+                        logger.info(f"✅ Updated expiry for {up.wl.email} (admin remove time)")
+                    except Exception as e:
+                        logger.error(f"🛑 Failed to update expiry for {up.wl.email}: {e}")
 
                 await message.answer(f"✅ Удалено время у пользователя {user_id}")
             else:
@@ -1059,8 +968,7 @@ async def handle_user_list_active(callback: CallbackQuery):
     for user in users:
         expire_date = user.subscription_end.strftime("%d.%m.%Y %H:%M")
         username = f"@{user.username}" if user.username else "none"
-        tier = getattr(user, 'subscription_tier', SubscriptionTier.STANDARD) or SubscriptionTier.STANDARD
-        user_line = f"• {user.full_name} ({username} | <code>{user.telegram_id}</code>) [{tier.value}] — до <code>{expire_date}</code>\n"
+        user_line = f"• {user.full_name} ({username} | <code>{user.telegram_id}</code>) — до <code>{expire_date}</code>\n"
         if len(text) + len(user_line) > MAX_MESSAGE_LENGTH:
             await callback.message.answer(text, parse_mode="HTML")
             text = "👤 <b>Продолжение:</b>\n\n"

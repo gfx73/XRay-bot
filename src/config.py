@@ -3,13 +3,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, YamlConfigSettingsSource
 
-from models import SubscriptionTier
-
 
 class DigitalProduct(BaseModel):
     name: str
     button_title: str = ""
-    tier: SubscriptionTier
     hours: int
     url: str = ""
     price: int = 0
@@ -25,7 +22,6 @@ class DigitalProduct(BaseModel):
 
 class TributeSub(BaseModel):
     name: str
-    tier: SubscriptionTier
     url: str
     referral_reward_hours: int = 0
 
@@ -41,17 +37,14 @@ class Config(BaseSettings):
     PAYMENT_TOKEN: str = ""
 
     STANDARD_INBOUNDS: str = ""
-    PREMIUM_INBOUNDS: str = ""
+    WL_INBOUNDS: str = ""
 
-    PREMIUM_TRAFFIC_LIMIT_GB: int = 0
+    WL_TRAFFIC_LIMIT_GB: int = 0
     STANDARD_TRAFFIC_LIMIT_GB: int = 0
     STANDARD_IP_LIMIT: int = 0
-    PREMIUM_IP_LIMIT: int = 0
+    WL_IP_LIMIT: int = 0
 
     TRIAL_DAYS: int = 3
-    TRIAL_TIER: str = "standard"
-
-    PREMIUM_PRICE_MULTIPLIER: float = 1.5
 
     PRICES: dict[int, dict[str, int]] = {
         1: {"base_price": 100, "discount_percent": 0},
@@ -87,23 +80,22 @@ class Config(BaseSettings):
             return []
         return [{"id": int(p)} for p in (s.strip() for s in raw.split(",")) if p.isdigit()]
 
-    def get_inbound_configs(self, tier: SubscriptionTier) -> list[dict]:
-        raw = self.PREMIUM_INBOUNDS if tier == SubscriptionTier.PREMIUM else self.STANDARD_INBOUNDS
-        return self._parse_inbound_configs_raw(raw)
+    def get_standard_inbounds(self) -> list[dict]:
+        return self._parse_inbound_configs_raw(self.STANDARD_INBOUNDS)
 
-    def calculate_price(self, months: int, tier: SubscriptionTier = SubscriptionTier.STANDARD) -> int:
+    def get_wl_inbounds(self) -> list[dict]:
+        return self._parse_inbound_configs_raw(self.WL_INBOUNDS)
+
+    def has_wl_inbounds(self) -> bool:
+        return bool(self.WL_INBOUNDS)
+
+    def calculate_price(self, months: int) -> int:
         if months not in self.PRICES:
             return 0
         price_info = self.PRICES[months]
         base_price = price_info["base_price"]
         discount_amount = (base_price * price_info["discount_percent"]) // 100
-        basic_price = base_price - discount_amount
-        if tier == SubscriptionTier.PREMIUM:
-            return int(basic_price * self.PREMIUM_PRICE_MULTIPLIER)
-        return basic_price
-
-    def has_premium_inbounds(self) -> bool:
-        return bool(self.PREMIUM_INBOUNDS)
+        return base_price - discount_amount
 
 
 config = Config()

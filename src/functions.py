@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from config import config
-from models import InboundMeta, ProfileSlot, SlotName, SubscriptionTier, UserProfiles
+from models import InboundMeta, ProfileSlot, SlotName, UserProfiles
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ class XUIAPI:
 
     async def create_static_client(self, profile_name: str):  # noqa: PLR0911
         """Создаёт статический клиент в первом Basic-инбаунде."""
-        basic_configs = config.get_inbound_configs(SubscriptionTier.STANDARD)
+        basic_configs = config.get_standard_inbounds()
         if not basic_configs:
             logger.error("🛑 No basic inbounds configured for static client")
             return None
@@ -491,10 +491,10 @@ async def update_client_expiry(email: str, expiry_time: int):
 
 async def get_global_stats():
     """Агрегирует статистику по всем сконфигурированным инбаундам."""
-    all_inbound_ids: set[int] = set()
-    for tier in SubscriptionTier:
-        for cfg in config.get_inbound_configs(tier):
-            all_inbound_ids.add(cfg["id"])
+    all_inbound_ids: set[int] = {
+        cfg["id"]
+        for cfg in [*config.get_standard_inbounds(), *config.get_wl_inbounds()]
+    }
     api = XUIAPI()
     try:
         total = {"upload": 0, "download": 0}
@@ -527,56 +527,50 @@ async def get_user_stats(email: str):
 # URL-генерация
 # ──────────────────────────────────────────────────────────────
 
-async def _sync_standard_slot(telegram_id: int, std_expiry: int, existing: UserProfiles) -> ProfileSlot | None:
+async def _sync_standard_slot(telegram_id: int, expiry: int, existing: UserProfiles) -> ProfileSlot | None:
     """Update expiry for existing standard client or create a new one."""
     if existing.standard is not None:
-        await update_client_expiry(existing.standard.email, std_expiry)
+        await update_client_expiry(existing.standard.email, expiry)
         return existing.standard
     return await create_client(
-        telegram_id, std_expiry, config.get_inbound_configs(SubscriptionTier.STANDARD),
+        telegram_id, expiry, config.get_standard_inbounds(),
         traffic_limit_gb=config.STANDARD_TRAFFIC_LIMIT_GB,
         ip_limit=config.STANDARD_IP_LIMIT,
     )
 
 
-async def _sync_wl_slot(telegram_id: int, prem_expiry: int, existing: UserProfiles) -> ProfileSlot | None:
+async def _sync_wl_slot(telegram_id: int, expiry: int, existing: UserProfiles) -> ProfileSlot | None:
     """Update expiry for existing wl client or create a new one."""
     if existing.wl is not None:
-        await update_client_expiry(existing.wl.email, prem_expiry)
+        await update_client_expiry(existing.wl.email, expiry)
         return existing.wl
     return await create_client(
-        telegram_id, prem_expiry, config.get_inbound_configs(SubscriptionTier.PREMIUM),
+        telegram_id, expiry, config.get_wl_inbounds(),
         email_suffix=f"_{SlotName.WL.value}",
-        traffic_limit_gb=config.PREMIUM_TRAFFIC_LIMIT_GB,
-        ip_limit=config.PREMIUM_IP_LIMIT,
+        traffic_limit_gb=config.WL_TRAFFIC_LIMIT_GB,
+        ip_limit=config.WL_IP_LIMIT,
     )
 
 
-async def sync_profiles_for_tier(
+async def sync_profiles(
     telegram_id: int,
-    tier: SubscriptionTier,
-    std_expiry: int,
-    prem_expiry: int,
+    expiry: int,
     existing: UserProfiles,
 ) -> UserProfiles:
-    """Sync VPN profiles after a subscription payment.
+    """Sync both VPN profile slots after a subscription payment.
 
-    - standard: syncs standard slot, copies existing wl without updating its expiry.
-    - premium + premium inbounds: syncs both standard and wl slots.
-    - premium without premium inbounds: syncs standard only (no wl).
+    Always syncs both standard and wl (if WL_INBOUNDS configured).
     """
     result = UserProfiles()
 
-    std_slot = await _sync_standard_slot(telegram_id, std_expiry, existing)
+    std_slot = await _sync_standard_slot(telegram_id, expiry, existing)
     if std_slot:
         result.standard = std_slot
 
-    if tier == SubscriptionTier.PREMIUM and config.has_premium_inbounds():
-        wl_slot = await _sync_wl_slot(telegram_id, prem_expiry, existing)
+    if config.has_wl_inbounds():
+        wl_slot = await _sync_wl_slot(telegram_id, expiry, existing)
         if wl_slot:
             result.wl = wl_slot
-    elif tier == SubscriptionTier.STANDARD and existing.wl is not None:
-        result.wl = existing.wl
 
     return result
 
@@ -682,8 +676,7 @@ async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
     try:
         all_inbound_ids: set[int] = {
             cfg["id"]
-            for tier in SubscriptionTier
-            for cfg in config.get_inbound_configs(tier)
+            for cfg in [*config.get_standard_inbounds(), *config.get_wl_inbounds()]
         }
 
         logger.info(f"🔍 [check_and_fix] Checking inbounds: {all_inbound_ids}")
@@ -733,7 +726,7 @@ async def check_and_fix_subscriptions() -> dict:  # noqa: PLR0912, PLR0915
 
             user, _ = users_map[email]
             try:
-                sub_end_raw = user.premium_end if email.endswith("_wl") else user.subscription_end
+                sub_end_raw = user.subscription_end
                 if isinstance(sub_end_raw, str):
                     sub_end_db = datetime.fromisoformat(sub_end_raw)
                 else:
