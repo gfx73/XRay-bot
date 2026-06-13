@@ -56,7 +56,6 @@ async def _send_expiry_notifications(bot, user, now: datetime, active: bool):
     """Send 24h expiry warning notification."""
     sub_remains = user.subscription_end - now
     sub_time_to_notify = sub_remains < timedelta(days=1)
-    logger.info(f"expiry info {user.telegram_id=} {active=} {sub_time_to_notify=} {user.notified=} {sub_remains=}")
     if active and sub_time_to_notify and not user.notified:
         try:
             logger.info(f"Sending expiry warning notification for user {user.telegram_id}")
