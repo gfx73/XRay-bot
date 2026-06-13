@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 async def check_subscriptions(bot: Bot):
     """Проверка статуса подписок."""
     while True:
+        logger.info("Checking subscriptions...")
         try:
             now = datetime.utcnow()
             users = await get_all_users()
@@ -53,8 +54,11 @@ async def check_subscriptions(bot: Bot):
 
 async def _send_expiry_notifications(bot, user, now: datetime, active: bool):
     """Send 24h expiry warning notification."""
-    if active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
+    sub_remains = user.subscription_end - now < timedelta(days=1)
+    logger.info(f"expiry info {user.telegram_id=} {sub_remains=} {user.notified=}")
+    if active and sub_remains and not user.notified:
         try:
+            logger.info(f"Sending expiry warning notification for user {user.telegram_id}")
             await bot.send_message(user.telegram_id, SUB_EXPIRY_WARNING, parse_mode="Markdown")
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
