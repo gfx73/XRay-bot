@@ -192,8 +192,11 @@ def _is_subscription_active(user) -> bool:
     return bool(user.subscription_end and user.subscription_end > now)
 
 
-async def _create_client(telegram_id: int, subscription_end) -> UserProfiles:
-    """Создаёт оба VPN-профиля (standard и wl) для пользователя."""
+async def _create_client(telegram_id: int, subscription_end, has_purchased: bool = False) -> UserProfiles:
+    """Создаёт оба VPN-профиля (standard и wl) для пользователя.
+
+    has_purchased: если False — для WL используется триальный лимит трафика.
+    """
     expiry = get_safe_expiry_timestamp(subscription_end)
     result = UserProfiles()
 
@@ -209,10 +212,15 @@ async def _create_client(telegram_id: int, subscription_end) -> UserProfiles:
             logger.error(f"🛑 Failed to create standard client for user {telegram_id}")
 
         if config.has_wl_inbounds():
+            wl_traffic = (
+                config.WL_TRAFFIC_LIMIT_GB
+                if has_purchased or config.TRIAL_WL_TRAFFIC_LIMIT_GB == 0
+                else config.TRIAL_WL_TRAFFIC_LIMIT_GB
+            )
             wl_profile = await create_client(
                 telegram_id, expiry, config.get_wl_inbounds(),
                 email_suffix=f"_{SlotName.WL.value}",
-                traffic_limit_gb=config.WL_TRAFFIC_LIMIT_GB,
+                traffic_limit_gb=wl_traffic,
                 ip_limit=config.WL_IP_LIMIT,
             )
             if wl_profile:
@@ -396,7 +404,7 @@ async def connect_cmd(message: Message, bot: Bot):
 
     if not _has_profiles(user):
         await message.answer("⚙️ Создаём ваш VPN профиль...")
-        new_profiles = await _create_client(user.telegram_id, user.subscription_end)
+        new_profiles = await _create_client(user.telegram_id, user.subscription_end, has_purchased=bool(user.has_purchased))
         if new_profiles:
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
@@ -570,6 +578,7 @@ async def process_successful_payment(message: Message, bot: Bot):
 
         now = datetime.utcnow()
         action_type = "продлена" if (user.subscription_end and user.subscription_end > now) else "куплена"
+        is_first_purchase = not bool(user.has_purchased)
 
         success = await update_subscription(message.from_user.id, months)
         suffix = "месяц" if months == 1 else "месяца" if months in (2, 3, 4) else "месяцев"
@@ -582,12 +591,14 @@ async def process_successful_payment(message: Message, bot: Bot):
         expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
         existing = _get_profiles(updated_user)
 
-        profiles_to_save = await sync_profiles(message.from_user.id, expiry, existing)
+        profiles_to_save = await sync_profiles(message.from_user.id, expiry, existing, is_first_purchase=is_first_purchase)
 
         with Session() as session:
             db_user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
             if db_user:
                 db_user.profiles = profiles_to_save
+                if is_first_purchase:
+                    db_user.has_purchased = True
                 session.commit()
 
         await message.answer(payment_success(action_type, months, suffix))
@@ -623,7 +634,7 @@ async def connect_profile(callback: CallbackQuery):
         user = await get_user(user.telegram_id)
         if not _has_profiles(user):
             await callback.message.edit_text("⚙️ Создаём ваш VPN профиль...")
-            new_profiles = await _create_client(user.telegram_id, user.subscription_end)
+            new_profiles = await _create_client(user.telegram_id, user.subscription_end, has_purchased=bool(user.has_purchased))
             if new_profiles:
                 with Session() as session:
                     db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()

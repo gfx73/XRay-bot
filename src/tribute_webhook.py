@@ -31,8 +31,11 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 }
 
 
-async def _sync_profiles_after_payment(telegram_id: int) -> None:
-    """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки."""
+async def _sync_profiles_after_payment(telegram_id: int, is_first_purchase: bool = False) -> None:
+    """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки.
+
+    is_first_purchase: если True — обновляет лимит трафика WL-профиля до полного.
+    """
     updated_user = await get_user(telegram_id)
     if not updated_user:
         return
@@ -40,12 +43,14 @@ async def _sync_profiles_after_payment(telegram_id: int) -> None:
     expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
     existing = updated_user.profiles
 
-    profiles_to_save = await sync_profiles(telegram_id, expiry, existing)
+    profiles_to_save = await sync_profiles(telegram_id, expiry, existing, is_first_purchase=is_first_purchase)
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
         if db_user:
             db_user.profiles = profiles_to_save
+            if is_first_purchase:
+                db_user.has_purchased = True
             session.commit()
 
 
@@ -116,13 +121,16 @@ async def _handle_subscription_event(
 
     await _ensure_user(telegram_id, payload)
 
+    user = await get_user(telegram_id)
+    is_first_purchase = not bool(user and user.has_purchased)
+
     success = await update_subscription(telegram_id, months=months)
     if not success:
         logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id}")
         return
 
     try:
-        await _sync_profiles_after_payment(telegram_id)
+        await _sync_profiles_after_payment(telegram_id, is_first_purchase=is_first_purchase)
     except Exception as e:
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 
@@ -148,13 +156,16 @@ async def _handle_digital_product_event(
     """Handle new_digital_product events for a matched product."""
     await _ensure_user(telegram_id, payload)
 
+    user = await get_user(telegram_id)
+    is_first_purchase = not bool(user and user.has_purchased)
+
     success = await update_subscription(telegram_id, hours=product.hours)
     if not success:
         logger.error(f"🛑 Tribute: update_subscription failed for {telegram_id} (product='{product.name}')")
         return
 
     try:
-        await _sync_profiles_after_payment(telegram_id)
+        await _sync_profiles_after_payment(telegram_id, is_first_purchase=is_first_purchase)
     except Exception as e:
         logger.error(f"🛑 Tribute: profile sync error for {telegram_id}: {e}")
 

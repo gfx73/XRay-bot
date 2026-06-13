@@ -297,9 +297,12 @@ class XUIAPI:
             logger.exception(f"🛑 Get client error: {e}")
             return None
 
-    async def update_client_expiry(self, email: str, expiry_time: int):
-        """Обновляет expiry клиента по email (применяется ко всем инбаундам)."""
-        logger.info(f"🔍 [update_client_expiry] email={email}, expiry_time={expiry_time}")
+    async def update_client_expiry(self, email: str, expiry_time: int, traffic_limit_gb: int | None = None):
+        """Обновляет expiry клиента по email (применяется ко всем инбаундам).
+
+        traffic_limit_gb: если задан — также обновляет лимит трафика (0 = безлимит).
+        """
+        logger.info(f"🔍 [update_client_expiry] email={email}, expiry_time={expiry_time}, traffic_limit_gb={traffic_limit_gb}")
         if not await self.login():
             return False
 
@@ -319,8 +322,9 @@ class XUIAPI:
             logger.error(f"🛑 update_client_expiry: client {email!r} not found")
             return False
 
-        if current_client.get("expiryTime") == expiry_ms:
-            logger.info(f"⏭️ Skipping update for {email}: expiry already {expiry_ms} ms")
+        new_total_gb = (traffic_limit_gb * 1024 ** 3) if traffic_limit_gb is not None else current_client["totalGB"]
+        if current_client.get("expiryTime") == expiry_ms and current_client["totalGB"] == new_total_gb:
+            logger.info(f"⏭️ Skipping update for {email}: expiry and traffic already up to date")
             return True
 
         logger.info(current_client)
@@ -328,7 +332,7 @@ class XUIAPI:
             "id": current_client.get("uuid", ""),
             "flow": current_client["flow"],
             "limitIp": current_client["limitIp"],
-            "totalGB": current_client["totalGB"],
+            "totalGB": new_total_gb,
             "email": email,
             "expiryTime": expiry_ms,
             "enable": True,
@@ -480,11 +484,14 @@ async def delete_client_by_email(email: str):
         await api.close()
 
 
-async def update_client_expiry(email: str, expiry_time: int):
-    """Обновляет expiry клиента по email (все инбаунды)."""
+async def update_client_expiry(email: str, expiry_time: int, traffic_limit_gb: int | None = None):
+    """Обновляет expiry клиента по email (все инбаунды).
+
+    traffic_limit_gb: если задан — также обновляет лимит трафика.
+    """
     api = XUIAPI()
     try:
-        return await api.update_client_expiry(email, expiry_time)
+        return await api.update_client_expiry(email, expiry_time, traffic_limit_gb=traffic_limit_gb)
     finally:
         await api.close()
 
@@ -539,10 +546,14 @@ async def _sync_standard_slot(telegram_id: int, expiry: int, existing: UserProfi
     )
 
 
-async def _sync_wl_slot(telegram_id: int, expiry: int, existing: UserProfiles) -> ProfileSlot | None:
-    """Update expiry for existing wl client or create a new one."""
+async def _sync_wl_slot(telegram_id: int, expiry: int, existing: UserProfiles, is_first_purchase: bool = False) -> ProfileSlot | None:
+    """Update expiry for existing wl client or create a new one.
+
+    is_first_purchase: если True — также обновляет лимит трафика до полного (WL_TRAFFIC_LIMIT_GB).
+    """
     if existing.wl is not None:
-        await update_client_expiry(existing.wl.email, expiry)
+        traffic_update = config.WL_TRAFFIC_LIMIT_GB if is_first_purchase else None
+        await update_client_expiry(existing.wl.email, expiry, traffic_limit_gb=traffic_update)
         return existing.wl
     return await create_client(
         telegram_id, expiry, config.get_wl_inbounds(),
@@ -556,10 +567,11 @@ async def sync_profiles(
     telegram_id: int,
     expiry: int,
     existing: UserProfiles,
+    is_first_purchase: bool = False,
 ) -> UserProfiles:
     """Sync both VPN profile slots after a subscription payment.
 
-    Always syncs both standard and wl (if WL_INBOUNDS configured).
+    is_first_purchase: если True — обновляет лимит трафика WL-профиля до полного.
     """
     result = UserProfiles()
 
@@ -568,7 +580,7 @@ async def sync_profiles(
         result.standard = std_slot
 
     if config.has_wl_inbounds():
-        wl_slot = await _sync_wl_slot(telegram_id, expiry, existing)
+        wl_slot = await _sync_wl_slot(telegram_id, expiry, existing, is_first_purchase=is_first_purchase)
         if wl_slot:
             result.wl = wl_slot
 

@@ -40,6 +40,7 @@ class Config(BaseSettings):
     WL_INBOUNDS: str = ""
 
     WL_TRAFFIC_LIMIT_GB: int = 0
+    TRIAL_WL_TRAFFIC_LIMIT_GB: int = 0
     STANDARD_TRAFFIC_LIMIT_GB: int = 0
     STANDARD_IP_LIMIT: int = 0
     WL_IP_LIMIT: int = 0
