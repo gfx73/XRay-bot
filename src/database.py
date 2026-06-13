@@ -72,13 +72,6 @@ Session = sessionmaker(bind=engine)
 
 async def init_db():
     Base.metadata.create_all(engine)
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE users ADD COLUMN has_purchased BOOLEAN DEFAULT FALSE"))
-            conn.commit()
-            logger.info("✅ Migration: added has_purchased column")
-        except Exception:
-            pass  # column already exists
     logger.info("✅ Database tables created")
 
 async def get_user(telegram_id: int):
