@@ -206,7 +206,7 @@ def create_tribute_app(bot: Bot) -> FastAPI:
         elif event_name == "cancelled_subscription":
             logger.info(f"ℹ️ Tribute 'cancelled_subscription': user {telegram_id} — will expire naturally")
             with contextlib.suppress(Exception):
-                await bot.send_message(telegram_id, TRIBUTE_CANCELLED)
+                await bot.send_message(telegram_id, TRIBUTE_CANCELLED, parse_mode="Markdown")
         elif event_name == "new_digital_product":
             product_name = payload.get("name") or payload.get("product_name", "")
             product = _find_digital_product(product_name)

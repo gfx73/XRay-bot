@@ -55,7 +55,7 @@ async def _send_expiry_notifications(bot, user, now: datetime, active: bool):
     """Send 24h expiry warning notification."""
     if active and (user.subscription_end - now < timedelta(days=1)) and not user.notified:
         try:
-            await bot.send_message(user.telegram_id, SUB_EXPIRY_WARNING)
+            await bot.send_message(user.telegram_id, SUB_EXPIRY_WARNING, parse_mode="Markdown")
             with Session() as session:
                 db_user = session.query(User).filter_by(telegram_id=user.telegram_id).first()
                 if db_user:
@@ -111,7 +111,7 @@ async def _check_user_subscription(bot, user, now: datetime):
 
         if not active:
             try:
-                await bot.send_message(user.telegram_id, SUB_EXPIRED)
+                await bot.send_message(user.telegram_id, SUB_EXPIRED, parse_mode="Markdown")
             except Exception as e:
                 logger.warning(f"⚠️ Notification error: {e}")
 
