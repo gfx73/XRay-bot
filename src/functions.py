@@ -546,13 +546,19 @@ async def _sync_standard_slot(telegram_id: int, expiry: int, existing: UserProfi
     )
 
 
-async def _sync_wl_slot(telegram_id: int, expiry: int, existing: UserProfiles, is_first_purchase: bool = False) -> ProfileSlot | None:
+async def _sync_wl_slot(telegram_id: int, expiry: int, existing: UserProfiles, is_first_purchase: bool = False, wl_traffic_gb: int | None = None) -> ProfileSlot | None:
     """Update expiry for existing wl client or create a new one.
 
     is_first_purchase: если True — также обновляет лимит трафика до полного (WL_TRAFFIC_LIMIT_GB).
+    wl_traffic_gb: явное значение лимита трафика (используется при реферальном бонусе).
     """
     if existing.wl is not None:
-        traffic_update = config.WL_TRAFFIC_LIMIT_GB if is_first_purchase else None
+        if is_first_purchase:
+            traffic_update = config.WL_TRAFFIC_LIMIT_GB
+        elif wl_traffic_gb is not None:
+            traffic_update = wl_traffic_gb
+        else:
+            traffic_update = None
         await update_client_expiry(existing.wl.email, expiry, traffic_limit_gb=traffic_update)
         return existing.wl
     return await create_client(
@@ -568,10 +574,12 @@ async def sync_profiles(
     expiry: int,
     existing: UserProfiles,
     is_first_purchase: bool = False,
+    wl_traffic_gb: int | None = None,
 ) -> UserProfiles:
     """Sync both VPN profile slots after a subscription payment.
 
     is_first_purchase: если True — обновляет лимит трафика WL-профиля до полного.
+    wl_traffic_gb: явное значение лимита трафика (используется при реферальном бонусе).
     """
     result = UserProfiles()
 
@@ -580,7 +588,7 @@ async def sync_profiles(
         result.standard = std_slot
 
     if config.has_wl_inbounds():
-        wl_slot = await _sync_wl_slot(telegram_id, expiry, existing, is_first_purchase=is_first_purchase)
+        wl_slot = await _sync_wl_slot(telegram_id, expiry, existing, is_first_purchase=is_first_purchase, wl_traffic_gb=wl_traffic_gb)
         if wl_slot:
             result.wl = wl_slot
 

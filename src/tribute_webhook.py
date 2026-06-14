@@ -31,10 +31,11 @@ PERIOD_TO_MONTHS: dict[str, int] = {
 }
 
 
-async def _sync_profiles_after_payment(telegram_id: int, is_first_purchase: bool = False) -> None:
+async def _sync_profiles_after_payment(telegram_id: int, is_first_purchase: bool = False, wl_traffic_gb: int | None = None) -> None:
     """Создаёт/обновляет VPN-клиентов в 3x-ui после активации Tribute-подписки.
 
-    is_first_purchase: если True — обновляет лимит трафика WL-профиля до полного.
+    is_first_purchase: если True — обновляет лимит трафика WL-профиля до полного и ставит has_purchased.
+    wl_traffic_gb: явное значение лимита трафика (используется при реферальном бонусе).
     """
     updated_user = await get_user(telegram_id)
     if not updated_user:
@@ -43,7 +44,7 @@ async def _sync_profiles_after_payment(telegram_id: int, is_first_purchase: bool
     expiry = get_safe_expiry_timestamp(updated_user.subscription_end)
     existing = updated_user.profiles
 
-    profiles_to_save = await sync_profiles(telegram_id, expiry, existing, is_first_purchase=is_first_purchase)
+    profiles_to_save = await sync_profiles(telegram_id, expiry, existing, is_first_purchase=is_first_purchase, wl_traffic_gb=wl_traffic_gb)
 
     with Session() as session:
         db_user = session.query(User).filter_by(telegram_id=telegram_id).first()
@@ -80,6 +81,20 @@ async def _reward_referrer(buyer_id: int, reward_hours: int, bot: Bot) -> None:
         logger.warning(f"⚠️ Referral reward: update_subscription failed for referrer {referrer_id}")
         return
     logger.info(f"✅ Referral reward: {reward_hours}h → referrer {referrer_id} (buyer {buyer_id})")
+
+    referrer = await get_user(referrer_id)
+    if referrer:
+        wl_traffic = None
+        if (
+            not referrer.has_purchased
+            and config.has_wl_inbounds()
+            and config.TRIAL_WL_TRAFFIC_LIMIT_GB > 0
+            and config.WL_TRAFFIC_LIMIT_GB > 0
+        ):
+            wl_traffic = config.WL_TRAFFIC_LIMIT_GB
+        with contextlib.suppress(Exception):
+            await _sync_profiles_after_payment(referrer_id, wl_traffic_gb=wl_traffic)
+
     with contextlib.suppress(Exception):
         await bot.send_message(
             referrer_id,
